@@ -1,0 +1,2282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>SmartZoom</title>
+<meta name="description" content="Camera that follows the subject you tap and zooms automatically. Runs entirely on your phone.">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SmartZoom">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --glass: rgba(22, 24, 28, 0.5);
+  --glass-strong: rgba(22, 24, 28, 0.82);
+  --hairline: rgba(255, 255, 255, 0.14);
+  --ink: #f4f5f1;
+  --ink-dim: rgba(244, 245, 241, 0.68);
+  --amber: #ffc24b;
+  --ice: #a9c3ff;
+  --coral: #ff6f61;
+  --tally: #ff3b30;
+  --num: "Barlow Semi Condensed", ui-sans-serif, system-ui, sans-serif;
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: #000; color: var(--ink); font-family: var(--ui); overflow: hidden; }
+body { position: fixed; inset: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+[hidden] { display: none !important; }
+
+#app { position: absolute; inset: 0; }
+#preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform-origin: 50% 50%; background: #000; }
+#overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.glass { background: var(--glass); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); }
+
+/* ---------- top bar ---------- */
+.top {
+  position: absolute; left: 0; right: 0; top: 0;
+  padding: calc(var(--safe-t) + 10px) calc(var(--safe-r) + 14px) 0 calc(var(--safe-l) + 14px);
+  display: flex; align-items: flex-start; gap: 10px; pointer-events: none;
+}
+.top > * { pointer-events: auto; }
+.status {
+  display: flex; align-items: center; gap: 10px; min-height: 44px;
+  padding: 7px 14px 7px 12px; border-radius: 22px; max-width: calc(100% - 64px);
+}
+.status .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink-dim); flex: none; transition: background .25s; }
+.status[data-state="tracking"] .dot { background: var(--amber); }
+.status[data-state="reacquiring"] .dot { background: var(--ice); animation: pulse 1s ease-in-out infinite; }
+.status[data-state="lost"] .dot { background: var(--coral); }
+.status-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.status-main { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-sub { font-size: 12.5px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-sub:empty { display: none; }
+.spacer { flex: 1; }
+.rec-timer {
+  align-self: center; font-family: var(--num); font-size: 17px; font-weight: 600; letter-spacing: .02em;
+  padding: 4px 10px; border-radius: 8px; background: var(--tally); color: #fff; font-variant-numeric: tabular-nums;
+}
+.icon-btn { width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; flex: none; }
+.icon-btn svg { width: 22px; height: 22px; }
+
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* ---------- hint & toast ---------- */
+.hint, .toast {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  padding: 9px 16px; border-radius: 18px; font-size: 14.5px; text-align: center;
+  max-width: min(86vw, 360px); pointer-events: none;
+}
+.hint { bottom: calc(var(--safe-b) + 268px); color: var(--ink); transition: opacity .3s; }
+.toast { top: calc(var(--safe-t) + 70px); background: var(--glass-strong); opacity: 0; transition: opacity .25s; }
+.toast.show { opacity: 1; }
+.paused {
+  position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+  background: rgba(0,0,0,.6); font-size: 16px; padding: 24px;
+}
+
+/* ---------- bottom controls ---------- */
+.bottom {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 0 calc(var(--safe-r) + 12px) calc(var(--safe-b) + 14px) calc(var(--safe-l) + 12px);
+  display: flex; flex-direction: column; gap: 12px;
+  background: linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0));
+  padding-top: 28px;
+}
+.toggles { display: flex; justify-content: center; gap: 8px; }
+.chip {
+  height: 38px; padding: 0 15px 0 12px; border-radius: 19px; display: inline-flex; align-items: center; gap: 7px;
+  font-size: 14px; font-weight: 600; color: var(--ink-dim); transition: background .2s, color .2s;
+  white-space: nowrap; flex: none;
+}
+@media (max-width: 360px) { .chip { padding: 0 11px 0 9px; font-size: 13px; } .toggles { gap: 6px; } }
+.chip svg { width: 18px; height: 18px; }
+.chip[aria-pressed="true"] { background: rgba(255, 194, 75, .2); color: var(--amber); }
+.chip.stop { color: var(--ink); }
+
+/* The lens-barrel zoom scale: the app's signature control. */
+.dial { position: relative; height: 58px; margin: 0 -12px; touch-action: none; }
+.dial canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.dial-readout {
+  position: absolute; left: 50%; top: -2px; transform: translateX(-50%);
+  font-family: var(--num); font-weight: 600; font-size: 19px; letter-spacing: .01em;
+  font-variant-numeric: tabular-nums; color: var(--ink); text-shadow: 0 1px 3px rgba(0,0,0,.6);
+}
+.dial-readout small { font-size: 12px; font-weight: 500; color: var(--ink-dim); margin-left: 4px; }
+
+.controls { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
+.controls > :first-child { justify-self: start; }
+.controls > :last-child { justify-self: end; }
+.thumb {
+  width: 48px; height: 48px; border-radius: 10px; overflow: hidden; border: 1.5px solid var(--hairline);
+  background: rgba(255,255,255,.06) center/cover no-repeat;
+}
+.thumb:disabled { opacity: .35; }
+.round { width: 52px; height: 52px; border-radius: 26px; }
+.shutter-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.modes { display: flex; gap: 18px; font-size: 13.5px; font-weight: 600; }
+.modes button { color: var(--ink-dim); padding: 4px 2px; }
+.modes button[aria-pressed="true"] { color: var(--amber); }
+.shutter {
+  width: 76px; height: 76px; border-radius: 50%; border: 4px solid var(--ink);
+  display: grid; place-items: center;
+}
+.shutter span { width: 60px; height: 60px; border-radius: 50%; background: var(--ink); transition: all .22s cubic-bezier(.3,.7,.4,1); }
+.shutter:active span { transform: scale(.92); }
+.shutter[data-mode="video"] span { background: var(--tally); }
+.shutter[data-recording="true"] span { width: 30px; height: 30px; border-radius: 7px; }
+
+/* ---------- sheets ---------- */
+.sheet-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.35); opacity: 0; transition: opacity .25s; }
+.sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; max-height: 86%;
+  overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+  border-radius: 22px 22px 0 0; background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3); backdrop-filter: blur(24px) saturate(1.3);
+  padding: 8px calc(var(--safe-r) + 20px) calc(var(--safe-b) + 24px) calc(var(--safe-l) + 20px);
+  transform: translateY(102%); transition: transform .32s cubic-bezier(.2,.8,.2,1);
+}
+.sheet-host.open .sheet { transform: none; }
+.sheet-host.open .sheet-backdrop { opacity: 1; }
+.sheet-host { position: absolute; inset: 0; pointer-events: none; }
+.sheet-host.open { pointer-events: auto; }
+.grabber { width: 38px; height: 5px; border-radius: 3px; background: var(--hairline); margin: 4px auto 10px; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.sheet h2 { font-size: 20px; margin: 0; font-weight: 700; }
+.done { font-weight: 600; color: var(--amber); padding: 8px 4px; }
+.row { padding: 14px 0; border-bottom: 1px solid var(--hairline); }
+.row:last-of-type { border-bottom: 0; }
+.row-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.row label, .row .label { font-size: 15.5px; font-weight: 600; }
+.row p { margin: 4px 0 0; font-size: 13px; color: var(--ink-dim); line-height: 1.4; max-width: 60ch; }
+.seg { display: flex; margin-top: 10px; background: rgba(255,255,255,.08); border-radius: 11px; padding: 3px; }
+.seg button { flex: 1; height: 34px; border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--ink-dim); }
+.seg button[aria-pressed="true"] { background: rgba(255,255,255,.16); color: var(--ink); }
+.seg button:disabled { opacity: .35; }
+.switch { position: relative; width: 51px; height: 31px; border-radius: 16px; background: rgba(255,255,255,.18); flex: none; transition: background .2s; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; transition: transform .22s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+.switch[aria-checked="true"] { background: var(--amber); }
+.switch[aria-checked="true"]::after { transform: translateX(20px); }
+.fineprint { font-size: 12.5px; color: var(--ink-dim); line-height: 1.5; margin-top: 18px; }
+
+.tray-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+.tray-item { position: relative; aspect-ratio: 3/4; border-radius: 10px; overflow: hidden; background: #111; }
+.tray-item img, .tray-item video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tray-item .badge { position: absolute; left: 6px; bottom: 6px; font-size: 11.5px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: rgba(0,0,0,.6); }
+.tray-item.saved::after { content: "Saved"; position: absolute; right: 6px; top: 6px; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: rgba(255,194,75,.9); color: #000; }
+.tray-empty { color: var(--ink-dim); font-size: 14px; padding: 24px 0; text-align: center; }
+
+/* ---------- start / permission gate ---------- */
+.gate {
+  position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end;
+  padding: calc(var(--safe-t) + 32px) calc(var(--safe-r) + 26px) calc(var(--safe-b) + 34px) calc(var(--safe-l) + 26px);
+  background:
+    radial-gradient(120% 70% at 50% 30%, rgba(255,194,75,.10), rgba(0,0,0,0) 60%),
+    #000;
+}
+.gate-mark { flex: 1; display: grid; place-items: center; }
+.gate-mark svg { width: min(56vw, 230px); height: auto; }
+.gate h1 { font-family: var(--num); font-weight: 600; font-size: 40px; line-height: 1.05; margin: 0 0 12px; letter-spacing: -.005em; }
+.gate p { font-size: 16px; line-height: 1.5; color: var(--ink-dim); margin: 0 0 12px; max-width: 34ch; }
+.gate ol { margin: 0 0 12px; padding-left: 20px; color: var(--ink-dim); line-height: 1.55; font-size: 15px; }
+.primary {
+  margin-top: 14px; height: 54px; border-radius: 27px; background: var(--amber); color: #1a1406;
+  font-size: 17px; font-weight: 700; width: 100%;
+}
+.secondary { margin-top: 10px; height: 46px; width: 100%; font-weight: 600; color: var(--ink-dim); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+@media (min-width: 700px) and (orientation: landscape) {
+  .bottom { left: auto; width: 420px; right: 0; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <video id="preview" playsinline muted autoplay></video>
+  <canvas id="overlay" aria-label="Camera view. Tap a subject to follow it."></canvas>
+
+  <header class="top">
+    <div id="status" class="status glass" role="status" aria-live="polite" data-state="idle">
+      <span class="dot" aria-hidden="true"></span>
+      <div class="status-text">
+        <span id="statusMain" class="status-main">Starting camera</span>
+        <span id="statusSub" class="status-sub"></span>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div id="recTimer" class="rec-timer" hidden>0:00</div>
+    <button id="settingsBtn" class="icon-btn glass" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
+    </button>
+  </header>
+
+  <div id="hint" class="hint glass">Tap a person, animal or vehicle to follow it</div>
+  <div id="toast" class="toast" role="alert"></div>
+  <div id="paused" class="paused" hidden></div>
+
+  <footer class="bottom">
+    <div class="toggles">
+      <button id="followBtn" class="chip glass" aria-pressed="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 9V5h4M16 5h4v4M20 15v4h-4M8 19H4v-4"/><circle cx="12" cy="12" r="2.5"/></svg>
+        <span>AI tracking</span>
+      </button>
+      <button id="stopBtn" class="chip glass stop" aria-label="Release subject" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>
+        <span>Release</span>
+      </button>
+      <button id="autoZoomBtn" class="chip glass" aria-pressed="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M8.5 11h5M11 8.5v5"/></svg>
+        <span>Auto zoom</span>
+      </button>
+    </div>
+    <div id="dial" class="dial" role="slider" tabindex="0" aria-label="Zoom" aria-valuemin="1" aria-valuemax="10" aria-valuenow="1">
+      <canvas id="dialCanvas"></canvas>
+      <div id="zoomReadout" class="dial-readout">1.0×</div>
+    </div>
+    <div class="controls">
+      <button id="trayBtn" class="thumb" aria-label="Recent photos and videos" disabled></button>
+      <div class="shutter-wrap">
+        <div class="modes" role="group" aria-label="Capture mode">
+          <button data-mode="photo" aria-pressed="true">Photo</button>
+          <button data-mode="video" aria-pressed="false">Video</button>
+        </div>
+        <button id="shutter" class="shutter" data-mode="photo" aria-label="Take photo"><span></span></button>
+      </div>
+      <button id="flipBtn" class="icon-btn round glass" aria-label="Switch between front and back camera">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5A8 8 0 0 1 18.5 7M20 14.5A8 8 0 0 1 5.5 17"/><path d="M18.8 3.6l-.3 3.6-3.6-.3M5.2 20.4l.3-3.6 3.6.3"/></svg>
+      </button>
+    </div>
+  </footer>
+
+  <!-- Settings -->
+  <div id="settingsHost" class="sheet-host" aria-hidden="true">
+    <div class="sheet-backdrop" data-close></div>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="grabber"></div>
+      <div class="sheet-head"><h2 id="settingsTitle">Settings</h2><button class="done" data-close>Done</button></div>
+      <div id="settingsBody"></div>
+      <p class="fineprint">Everything is processed on this phone. Video frames, photos and recordings are never uploaded; the AI model is downloaded once and then works offline.</p>
+    </section>
+  </div>
+
+  <!-- Captures -->
+  <div id="trayHost" class="sheet-host" aria-hidden="true">
+    <div class="sheet-backdrop" data-close></div>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="trayTitle">
+      <div class="grabber"></div>
+      <div class="sheet-head"><h2 id="trayTitle">This session</h2><button class="done" data-close>Done</button></div>
+      <p class="fineprint" style="margin-top:0">Tap a photo or video to save it to Photos or share it. Unsaved captures are cleared when you close the app.</p>
+      <div id="trayGrid" class="tray-grid"></div>
+    </section>
+  </div>
+
+  <!-- Start / permissions -->
+  <section id="gate" class="gate">
+    <div class="gate-mark" aria-hidden="true">
+      <svg viewBox="0 0 200 200" fill="none" stroke-linecap="round">
+        <g stroke="#ffc24b" stroke-width="7"><path d="M40 70V40h30M130 40h30v30M160 130v30h-30M70 160H40v-30"/></g>
+        <circle cx="100" cy="100" r="22" stroke="#f4f5f1" stroke-width="6"/>
+        <circle cx="100" cy="100" r="5" fill="#f4f5f1"/>
+      </svg>
+    </div>
+    <div id="gateBody"></div>
+  </section>
+</div>
+<script type="module">
+// ---- core.js ----
+// SmartZoom core: subject tracking + automatic zoom.
+// Pure JavaScript with no DOM access, so the exact same code runs in the browser and
+// in the Node test suite (tests/scenarios.mjs).
+//
+// Coordinate convention: boxes are in normalised "view" coordinates of the image the
+// user is framing: (0,0) top-left, (1,1) bottom-right. Each frame also carries the zoom
+// it was captured at. Camera zoom crops about the centre, so a point p seen at zoom z
+// sits at 0.5 + (p - 0.5) / z at zoom 1 ("angular" coordinates). The tracker works in
+// angular space so the camera's own zooming never looks like the subject moving, and
+// the zoom controller works on angular size so actuator lag cannot cause oscillation.
+
+// ---------------------------------------------------------------------------------
+// Geometry
+// ---------------------------------------------------------------------------------
+class Box {
+  constructor(left, top, right, bottom) {
+    this.left = left; this.top = top; this.right = right; this.bottom = bottom;
+  }
+  static fromCenter(cx, cy, w, h) { return new Box(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2); }
+  get w() { return this.right - this.left; }
+  get h() { return this.bottom - this.top; }
+  get cx() { return (this.left + this.right) / 2; }
+  get cy() { return (this.top + this.bottom) / 2; }
+  get area() { return Math.max(0, this.w) * Math.max(0, this.h); }
+  /** Fraction of the frame the subject spans along its most limiting axis. */
+  get coverage() { return Math.max(this.w, this.h); }
+  contains(x, y, pad = 0) {
+    return x >= this.left - pad && x <= this.right + pad && y >= this.top - pad && y <= this.bottom + pad;
+  }
+  iou(o) {
+    const ix = Math.min(this.right, o.right) - Math.max(this.left, o.left);
+    const iy = Math.min(this.bottom, o.bottom) - Math.max(this.top, o.top);
+    if (ix <= 0 || iy <= 0) return 0;
+    const inter = ix * iy;
+    const union = this.area + o.area - inter;
+    return union <= 0 ? 0 : inter / union;
+  }
+  centerDist(o) { return Math.hypot(this.cx - o.cx, this.cy - o.cy); }
+  /** True when an edge is within `m` of the frame border (subject is probably cut off). */
+  touchesEdge(m = 0.012) {
+    return this.left <= m || this.top <= m || this.right >= 1 - m || this.bottom >= 1 - m;
+  }
+  toAngular(z) {
+    return new Box(0.5 + (this.left - 0.5) / z, 0.5 + (this.top - 0.5) / z,
+      0.5 + (this.right - 0.5) / z, 0.5 + (this.bottom - 0.5) / z);
+  }
+  toFrame(z) {
+    return new Box(0.5 + (this.left - 0.5) * z, 0.5 + (this.top - 0.5) * z,
+      0.5 + (this.right - 0.5) * z, 0.5 + (this.bottom - 0.5) * z);
+  }
+  clamp() {
+    const c = (v) => Math.min(1, Math.max(0, v));
+    return new Box(c(this.left), c(this.top), c(this.right), c(this.bottom));
+  }
+}
+
+const absLnRatio = (a, b) => (a > 0 && b > 0 ? Math.abs(Math.log(a / b)) : Infinity);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const alphaFor = (dt, tau) => (tau <= 0 ? 1 : clamp(1 - Math.exp(-dt / tau), 0, 1));
+
+// ---------------------------------------------------------------------------------
+// Labels
+// ---------------------------------------------------------------------------------
+const Group = Object.freeze({ PERSON: 'person', ANIMAL: 'animal', VEHICLE: 'vehicle', OBJECT: 'object' });
+const ANIMALS = new Set(['bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe']);
+const VEHICLES = new Set(['bicycle', 'car', 'motorcycle', 'motorbike', 'airplane', 'bus', 'train', 'truck', 'boat']);
+
+/** Coarse group. Re-association is only ever allowed within a group, so a tracked person
+ *  can never "become" a passing car, while label flips like car ↔ truck are tolerated. */
+function groupOf(label) {
+  const l = String(label || '').trim().toLowerCase();
+  if (l === 'person') return Group.PERSON;
+  if (ANIMALS.has(l)) return Group.ANIMAL;
+  if (VEHICLES.has(l)) return Group.VEHICLE;
+  return Group.OBJECT;
+}
+
+// ---------------------------------------------------------------------------------
+// Appearance: hue/saturation histogram + grey-level histogram.
+// Hue and saturation barely change with brightness, so the signature survives the
+// subject walking from sun into shade. It is what separates "person in red" from
+// "person in blue" when people cross, and what re-identifies the subject after occlusion.
+// ---------------------------------------------------------------------------------
+const HUE_BINS = 18, SAT_BINS = 3, GREY_BINS = 8;
+const APPEARANCE_SIZE = HUE_BINS * SAT_BINS + GREY_BINS;
+
+const Appearance = {
+  /** rgba: Uint8ClampedArray (ImageData.data), w/h in pixels, box normalised to that image. */
+  compute(rgba, w, h, box) {
+    const x0 = Math.max(0, Math.floor((box.cx - box.w * 0.35) * w));
+    const x1 = Math.min(w - 1, Math.floor((box.cx + box.w * 0.35) * w));
+    const y0 = Math.max(0, Math.floor((box.cy - box.h * 0.4) * h));
+    const y1 = Math.min(h - 1, Math.floor((box.cy + box.h * 0.4) * h));
+    if (x1 - x0 < 2 || y1 - y0 < 2) return null;
+    const step = Math.max(1, Math.floor(Math.sqrt(((x1 - x0 + 1) * (y1 - y0 + 1)) / 1600)));
+    const hist = new Float32Array(APPEARANCE_SIZE);
+    let n = 0;
+    for (let y = y0; y <= y1; y += step) {
+      let i = (y * w + x0) * 4;
+      for (let x = x0; x <= x1; x += step, i += step * 4) {
+        addPixel(hist, rgba[i], rgba[i + 1], rgba[i + 2]);
+        n++;
+      }
+    }
+    if (!n) return null;
+    for (let k = 0; k < hist.length; k++) hist[k] /= n;
+    return hist;
+  },
+  /** Bhattacharyya coefficient in [0,1]. */
+  similarity(a, b) {
+    if (!a || !b) return null;
+    let s = 0;
+    for (let k = 0; k < a.length; k++) s += Math.sqrt(a[k] * b[k]);
+    return clamp(s, 0, 1);
+  },
+  blend(a, b, wb) {
+    const out = new Float32Array(a.length);
+    let sum = 0;
+    for (let k = 0; k < a.length; k++) { out[k] = a[k] * (1 - wb) + b[k] * wb; sum += out[k]; }
+    if (sum > 0) for (let k = 0; k < out.length; k++) out[k] /= sum;
+    return out;
+  },
+};
+
+function addPixel(hist, r8, g8, b8) {
+  const r = r8 / 255, g = g8 / 255, b = b8 / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const d = mx - mn;
+  const s = mx <= 0 ? 0 : d / mx;
+  if (s < 0.18 || mx < 0.12) { // unreliable hue: bucket by brightness
+    hist[HUE_BINS * SAT_BINS + Math.min(GREY_BINS - 1, Math.floor(mx * GREY_BINS))] += 1;
+    return;
+  }
+  let hue;
+  if (mx === r) hue = ((g - b) / d) % 6;
+  else if (mx === g) hue = (b - r) / d + 2;
+  else hue = (r - g) / d + 4;
+  hue *= 60; if (hue < 0) hue += 360;
+  const hi = Math.min(HUE_BINS - 1, Math.floor((hue / 360) * HUE_BINS));
+  const si = Math.min(SAT_BINS - 1, Math.floor(((s - 0.18) / 0.82) * SAT_BINS));
+  hist[hi * SAT_BINS + si] += 1;
+}
+
+// ---------------------------------------------------------------------------------
+// Filters
+// ---------------------------------------------------------------------------------
+/** One Euro filter (Casiez et al.): calm when still, responsive when moving. */
+class OneEuro {
+  constructor(minCutoff = 1.2, beta = 4, dCutoff = 1) {
+    this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff; this.init = false;
+  }
+  reset() { this.init = false; }
+  filter(v, dt) {
+    if (!this.init || dt <= 0) { this.x = v; this.dx = 0; this.init = true; return v; }
+    const a = (fc) => { const tau = 1 / (2 * Math.PI * fc); return 1 / (1 + tau / dt); };
+    this.dx += a(this.dCutoff) * ((v - this.x) / dt - this.dx);
+    this.x += a(this.minCutoff + this.beta * Math.abs(this.dx)) * (v - this.x);
+    return this.x;
+  }
+}
+
+class RollingMedian {
+  constructor(n) { this.n = n; this.v = []; }
+  add(x) {
+    this.v.push(x); if (this.v.length > this.n) this.v.shift();
+    const s = [...this.v].sort((a, b) => a - b), k = s.length;
+    return k % 2 ? s[(k - 1) / 2] : (s[k / 2 - 1] + s[k / 2]) / 2;
+  }
+  clear() { this.v = []; }
+}
+
+class BoxSmoother {
+  constructor() {
+    this.fx = new OneEuro(1.5, 6); this.fy = new OneEuro(1.5, 6);
+    this.fw = new OneEuro(1.0, 3); this.fh = new OneEuro(1.0, 3);
+  }
+  reset() { this.fx.reset(); this.fy.reset(); this.fw.reset(); this.fh.reset(); }
+  filter(b, dt) {
+    return Box.fromCenter(this.fx.filter(b.cx, dt), this.fy.filter(b.cy, dt),
+      this.fw.filter(b.w, dt), this.fh.filter(b.h, dt));
+  }
+}
+
+// ---------------------------------------------------------------------------------
+// Subject tracker
+// ---------------------------------------------------------------------------------
+const TrackState = Object.freeze({
+  IDLE: 'idle', TRACKING: 'tracking', REACQUIRING: 'reacquiring', LOST: 'lost',
+});
+
+/**
+ * Follows ONE user-selected subject across detector frames.
+ *
+ *  - Motion model: alpha-beta filter on centre and log-size, in angular space.
+ *  - Association: same group only; score = overlap with prediction + colour similarity
+ *    + centre proximity. Ambiguous frames (two similar candidates, weak overlap) are
+ *    skipped rather than guessed, which stops it jumping to a look-alike nearby.
+ *  - Recovery: after `coastTime` without a match it enters REACQUIRING and searches with
+ *    a widening spatial gate, then LOST, where it searches anywhere but demands a
+ *    stronger colour match. A candidate must be confirmed on consecutive detector
+ *    frames before the track is re-locked.
+ */
+class SubjectTracker {
+  constructor(opts = {}) {
+    this.setSensitivity(opts.sensitivity ?? 0.5);
+    this.coastTime = opts.coastTime ?? 0.6;
+    this.reacquireTimeout = opts.reacquireTimeout ?? 4.0;
+    this.smoother = new BoxSmoother();
+    this.reset();
+  }
+
+  /** s in [0,1]: higher follows fast/erratic subjects more eagerly, but is likelier to
+   *  latch onto a similar-looking object; lower is stricter. */
+  setSensitivity(s) {
+    this.sensitivity = clamp(s, 0, 1);
+    const k = this.sensitivity;
+    this.appMin = 0.5 - 0.2 * k;               // colour gate while tracking
+    this.reacqAppMin = 0.78 - 0.14 * k;        // colour needed to re-lock nearby
+    this.lostAppMin = 0.84 - 0.12 * k;         // colour needed to re-lock anywhere
+    this.gate = 1.3 + 1.2 * k;                 // centre gate in subject sizes
+    this.confirmations = k > 0.7 ? 1 : 2;
+  }
+
+  reset() {
+    this.state = TrackState.IDLE;
+    this.label = ''; this.group = null;
+    this.app = null; this.anchorApp = null;
+    this.x = null; this.v = [0, 0, 0, 0];
+    this.lastTime = 0; this.lastSeen = 0; this.lostSince = 0;
+    this.pending = null; this.lastMeasured = null; this.lastFrameZoom = 1;
+    this.simMean = 0.9; this.simSq = 0.81; this.simCount = 0;
+    this.displayAngular = null; this.lastDisplayTime = 0;
+    this.smoother.reset();
+  }
+
+  get active() { return this.state !== TrackState.IDLE; }
+
+  /**
+   * Tap-to-select. (x, y) is the tap in view coordinates. Picks the smallest detection
+   * containing the tap (padded a little for small subjects), else the nearest within reach.
+   */
+  select(x, y, detections, time, zoom) {
+    let best = null;
+    for (const d of detections) {
+      if (d.box.contains(x, y, 0.03) && (!best || d.box.area < best.box.area)) best = d;
+    }
+    if (!best) {
+      let bestD = 0.09;
+      for (const d of detections) {
+        const dist = Math.hypot(d.box.cx - x, d.box.cy - y);
+        if (dist < bestD) { bestD = dist; best = d; }
+      }
+    }
+    if (!best) return null;
+    this.reset();
+    this.state = TrackState.TRACKING;
+    this.label = best.label; this.group = groupOf(best.label);
+    this.app = best.appearance || null; this.anchorApp = this.app;
+    this._setFromBox(best.box.toAngular(zoom));
+    this.lastTime = this.lastSeen = time;
+    this.lastMeasured = best.box; this.lastFrameZoom = zoom;
+    return best;
+  }
+
+  _setFromBox(a) {
+    this.x = [a.cx, a.cy, Math.log(Math.max(a.w, 1e-4)), Math.log(Math.max(a.h, 1e-4))];
+    this.v = [0, 0, 0, 0];
+  }
+
+  _boxAt(dt) {
+    const [cx, cy, lw, lh] = this.x;
+    const [vx, vy, vw, vh] = this.v;
+    return Box.fromCenter(cx + vx * dt, cy + vy * dt, Math.exp(lw + vw * dt), Math.exp(lh + vh * dt));
+  }
+
+  _sim(a) {
+    if (!a) return null;
+    const s1 = Appearance.similarity(this.app, a);
+    const s2 = Appearance.similarity(this.anchorApp, a);
+    if (s1 == null) return s2;
+    if (s2 == null) return s1;
+    return Math.max(s1, s2);
+  }
+
+  /**
+   * Feed one detector frame. `detections` are in view coordinates; `zoom` is the zoom
+   * that frame was captured at. Returns a snapshot for the zoom controller and the UI.
+   */
+  update(detections, time, zoom) {
+    this.lastFrameZoom = zoom;
+    if (this.state === TrackState.IDLE) return this.snapshot(time, zoom, null);
+    const dt = Math.max(1e-3, time - this.lastTime);
+    this.lastTime = time;
+
+    // Predict (velocities decay while unobserved, so a coasting box doesn't fly away).
+    const unseen = time - this.lastSeen;
+    if (unseen > 0.15) { const d = Math.exp(-dt / 0.4); this.v = this.v.map((x) => x * d); }
+    for (let i = 0; i < 4; i++) this.x[i] += this.v[i] * dt;
+    const pred = this._boxAt(0);
+
+    const cands = [];
+    for (const d of detections) {
+      if (groupOf(d.label) !== this.group) continue;
+      cands.push({ d, a: d.box.toAngular(zoom) });
+    }
+
+    let measured = null;
+    if (this.state === TrackState.TRACKING) {
+      const r = this._associate(pred, cands);
+      if (r.match) {
+        measured = r.match;
+        this._correct(r.match.a, dt, r.crowded);
+        this.lastSeen = time;
+        const s = this._sim(r.match.d.appearance);
+        if (r.match.d.appearance && this.app && r.iou > 0.45 && s != null && s > 0.8) {
+          this.app = Appearance.blend(this.app, r.match.d.appearance, 0.08);
+        }
+      }
+      if (!measured && time - this.lastSeen > this.coastTime) {
+        this.state = TrackState.REACQUIRING;
+        this.lostSince = this.lastSeen;
+        this.pending = null;
+      }
+    }
+
+    if (this.state === TrackState.REACQUIRING || this.state === TrackState.LOST) {
+      if (this.state === TrackState.REACQUIRING && time - this.lostSince > this.reacquireTimeout) {
+        this.state = TrackState.LOST;
+      }
+      const hit = this._search(cands, time);
+      if (hit) {
+        this._setFromBox(hit.a);
+        this.state = TrackState.TRACKING;
+        this.lastSeen = time;
+        this.pending = null;
+        this.smoother.reset();
+        measured = hit;
+      }
+    }
+
+    if (measured) this.lastMeasured = measured.d.box;
+    return this.snapshot(time, zoom, measured ? measured.d : null);
+  }
+
+  _associate(pred, cands) {
+    const scale = Math.max(pred.w, pred.h, 0.03);
+    // How well this subject usually matches itself. Lighting and sensor noise change this
+    // per scene, so the colour test is relative to the observed mean/spread rather than a
+    // fixed number. It is bootstrapped from the first matches after selection.
+    const std = Math.sqrt(Math.max(0, this.simSq - this.simMean * this.simMean));
+    const relMin = this.simCount < 8 ? -1 : this.simMean - Math.max(0.06, 2.5 * std) - 0.05 * this.sensitivity;
+    const scored = [];
+    for (const c of cands) {
+      const iou = pred.iou(c.a);
+      const dist = pred.centerDist(c.a) / scale;
+      const sizeLn = absLnRatio(Math.sqrt(c.a.area), Math.sqrt(pred.area));
+      if (!(iou > 0.3 || (dist < this.gate && sizeLn < Math.log(1.8)))) continue;
+      const sim = this._sim(c.d.appearance);
+      if (sim != null && sim < this.appMin) continue;
+      // A look-alike passing close by (or in front, hiding the subject): reject clearly worse
+      // colour unless the overlap is near-total.
+      if (sim != null && sim < relMin && iou < 0.85) continue;
+      const score = 0.45 * iou + 0.35 * (sim ?? 0.7) + 0.2 * Math.exp(-dist * dist)
+        + (c.d.label === this.label ? 0.03 : 0);
+      scored.push({ c, iou, sim, score });
+    }
+    if (!scored.length) return { match: null };
+    scored.sort((a, b) => b.score - a.score);
+    const [b1, b2] = scored;
+    if (b2 && b1.score - b2.score < 0.06 && b1.iou < 0.5) return { match: null, ambiguous: true };
+    // Crowded: another same-group subject overlaps the match (people crossing).
+    const crowded = cands.some((c) => c !== b1.c && c.a.iou(b1.c.a) > 0.2);
+    // Learn the baseline only from matches that passed the colour test, so an impostor
+    // can never drag it down.
+    if (b1.sim != null && b1.iou > 0.45 && !crowded && b1.sim >= relMin) {
+      this.simCount++;
+      const k = this.simCount <= 8 ? 1 / this.simCount : 0.05;
+      this.simMean += k * (b1.sim - this.simMean);
+      this.simSq += k * (b1.sim * b1.sim - this.simSq);
+    }
+    return { match: b1.c, iou: b1.iou, crowded };
+  }
+
+  _correct(a, dt, crowded = false) {
+    const z = [a.cx, a.cy, Math.log(Math.max(a.w, 1e-4)), Math.log(Math.max(a.h, 1e-4))];
+    const alpha = [0.65, 0.65, 0.55, 0.55];
+    // While crowded, a neighbour can bias the box; don't let it drag the velocity along.
+    const beta = crowded ? [0.04, 0.04, 0.03, 0.03] : [0.18, 0.18, 0.12, 0.12];
+    const vmax = [2.5, 2.5, 2.0, 2.0];
+    for (let i = 0; i < 4; i++) {
+      const r = z[i] - this.x[i];
+      this.x[i] += alpha[i] * r;
+      this.v[i] = clamp(this.v[i] + (beta[i] / dt) * r, -vmax[i], vmax[i]);
+    }
+  }
+
+  _search(cands, time) {
+    const lost = this.state === TrackState.LOST;
+    const minSim = lost ? this.lostAppMin : this.reacqAppMin;
+    const last = this._boxAt(0);
+    const elapsed = time - this.lostSince;
+    const radius = 0.15 + 0.25 * elapsed;
+    let best = null;
+    for (const c of cands) {
+      const sim = this._sim(c.d.appearance);
+      if (sim == null || sim < minSim) continue;
+      const d = c.a.centerDist(last);
+      if (!lost) {
+        if (d > radius) continue;
+        if (absLnRatio(Math.sqrt(c.a.area), Math.sqrt(last.area)) > Math.log(3)) continue;
+      }
+      const score = sim + (lost ? 0 : 0.15 * (1 - d / radius));
+      if (!best || score > best.score) best = { ...c, score };
+    }
+    if (!best) { this.pending = null; return null; }
+    if (this.pending && (this.pending.a.iou(best.a) > 0.2 || this.pending.a.centerDist(best.a) < 0.1)) {
+      this.pending = { a: best.a, d: best.d, count: this.pending.count + 1 };
+    } else {
+      this.pending = { a: best.a, d: best.d, count: 1 };
+    }
+    const need = this.confirmations + (lost ? 1 : 0);
+    return this.pending.count >= need ? best : null;
+  }
+
+  /** Box to draw at display time `time` (extrapolated between detector frames, smoothed). */
+  displayBox(time, zoom) {
+    if (!this.x) return null;
+    const ahead = this.state === TrackState.TRACKING ? clamp(time - this.lastTime, 0, 0.15) : 0;
+    const a = this._boxAt(ahead);
+    const dt = this.lastDisplayTime ? clamp(time - this.lastDisplayTime, 1e-3, 0.1) : 1 / 60;
+    this.lastDisplayTime = time;
+    this.displayAngular = this.smoother.filter(a, dt);
+    return this.displayAngular.toFrame(zoom);
+  }
+
+  snapshot(time, zoom, measuredDet) {
+    return {
+      state: this.state,
+      label: this.label,
+      group: this.group,
+      time,
+      frameZoom: zoom,
+      measuredBox: measuredDet ? measuredDet.box : null,
+      predictedBox: this.x ? this._boxAt(0).toFrame(zoom) : null,
+      velocity: this.x ? [this.v[0], this.v[1]] : [0, 0], // angular units / s
+      sinceSeen: this.active ? time - this.lastSeen : 0,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------------
+// Automatic zoom controller
+// ---------------------------------------------------------------------------------
+const SubjectSize = Object.freeze({ small: 0.28, medium: 0.45, large: 0.62 });
+const ZoomSpeed = Object.freeze({
+  slow: { omega: 1.8, maxRate: 0.35 },   // maxRate in ln(zoom)/s: 0.35 ≈ 1.4× per second
+  normal: { omega: 2.8, maxRate: 0.7 },  // ≈ 2× per second
+  fast: { omega: 4.5, maxRate: 1.4 },    // ≈ 4× per second
+});
+
+/**
+ * Turns tracker snapshots into a smooth zoom trajectory.
+ *
+ *  1. Angular size a = coverage / frameZoom: how big the subject is independent of zoom.
+ *     Median-of-5 then a 0.2 s exponential filter rejects single-frame detector glitches.
+ *  2. Desired zoom = targetCoverage / a, so the subject fills the chosen fraction.
+ *  3. Framing cap: zoom crops about the centre, so an off-centre subject would be pushed
+ *     out of frame by zooming in. The cap keeps every box edge `edgeMargin` inside the
+ *     frame, and forces an urgent zoom-out if the subject is already at the edge.
+ *  4. Box touching the frame edge ⇒ size is underestimated ⇒ only zooming out is allowed.
+ *  5. Deadband with hysteresis: small size wobble (breathing, arm swing) never moves the
+ *     zoom; once moving it follows continuously until it settles.
+ *  6. Critically-damped spring in log-zoom space with a speed cap: zoom eases in and out
+ *     with no overshoot, and 1×→2× feels the same as 4×→8×.
+ *  7. Lost subject: hold, then ease out by `searchZoomOut` to widen the view for
+ *     reacquisition.  Manual zoom pauses auto zoom for `manualHold` seconds.
+ */
+class AutoZoomController {
+  constructor(opts = {}) {
+    this.enabled = opts.enabled ?? true;
+    this.targetCoverage = opts.targetCoverage ?? SubjectSize.medium;
+    this.speed = opts.speed ?? ZoomSpeed.normal;
+    this.deadband = opts.deadband ?? 0.12;
+    this.edgeMargin = opts.edgeMargin ?? 0.06;
+    this.manualHold = opts.manualHold ?? 2.5;
+    this.searchHold = opts.searchHold ?? 1.2;
+    this.searchZoomOut = opts.searchZoomOut ?? 2.0;
+    this.limits = { min: 1, max: 1, autoMax: 1 };
+    this.x = 0; this.v = 0; this.lastSent = 1;
+    this.manualUntil = -Infinity;
+    this._clear();
+  }
+
+  _clear() {
+    this.goal = null; this.adjusting = false; this.urgent = false;
+    this.median = new RollingMedian(5); this.angular = null; this.lastMeasureTime = null;
+    this.centers = []; this.sizeHist = []; this.trending = false; this.goalRate = 0;
+    this.searchStart = null; this.searchGoal = null; this.searchHoldX = null;
+    this.activity = 'idle';
+  }
+
+  setLimits(min, max, autoMax = max) {
+    this.limits = { min, max, autoMax: Math.max(min, Math.min(max, autoMax)) };
+    this.x = clamp(this.x, Math.log(min), Math.log(max));
+  }
+
+  /** Align with the camera's actual zoom (on start, after camera switch, after manual zoom). */
+  sync(zoom) { this.x = Math.log(zoom); this.v = 0; this.lastSent = zoom; }
+
+  reset(zoom) { this._clear(); if (zoom) this.sync(zoom); }
+
+  manual(zoom, now) {
+    this.sync(zoom);
+    this.manualUntil = now + this.manualHold;
+    this.goal = this.x; this.adjusting = false; this.goalRate = 0;
+    this.median.clear(); this.angular = null; this.sizeHist = [];
+    this.activity = 'manual';
+  }
+
+  get current() { return Math.exp(this.x); }
+
+  ingest(snap, now) {
+    const { min, autoMax } = this.limits;
+    const lnMin = Math.log(min), lnAutoMax = Math.log(autoMax);
+    switch (snap.state) {
+      case TrackState.IDLE:
+        this._clear();
+        return;
+      case TrackState.REACQUIRING:
+      case TrackState.LOST: {
+        this.median.clear(); this.angular = null; this.adjusting = false; this.urgent = false;
+        this.goalRate = 0; this.sizeHist = [];
+        if (this.searchStart == null) {
+          // Zoom out once, by a fixed factor from where we lost it; never zoom in while searching.
+          this.searchStart = now;
+          this.searchHoldX = this.x;
+          this.searchGoal = Math.max(lnMin, this.x - Math.log(this.searchZoomOut));
+        }
+        if (now - this.searchStart > this.searchHold) {
+          this.goal = this.searchGoal; this.activity = 'searching';
+        } else {
+          this.goal = this.searchHoldX; this.activity = 'holding';
+        }
+        return;
+      }
+      default: break;
+    }
+
+    // TRACKING
+    this.searchStart = null;
+    const box = snap.measuredBox;
+    if (!box) { if (this.goal == null) this.goal = this.x; return; }
+
+    const zf = snap.frameZoom;
+    const truncated = box.touchesEdge();
+    const dt = this.lastMeasureTime == null ? 0.033 : clamp(now - this.lastMeasureTime, 1e-3, 0.5);
+    this.lastMeasureTime = now;
+    if (!truncated) {
+      const med = this.median.add(box.coverage / zf);
+      this.angular = this.angular == null ? med : this.angular + alphaFor(dt, 0.2) * (med - this.angular);
+      this.sizeHist.push([now, Math.log(med)]);
+    }
+    while (this.sizeHist.length && now - this.sizeHist[0][0] > 1.0) this.sizeHist.shift();
+
+    // Lead compensation: filtering + the spring add ~0.4 s of lag. For a subject walking
+    // steadily towards/away, aim where its size will be rather than where it was.
+    let lead = 1;
+    const sh = this.sizeHist;
+    if (sh.length >= 6 && sh[sh.length - 1][0] - sh[0][0] > 0.5) {
+      let mt = 0, my = 0;
+      for (const [t, y] of sh) { mt += t; my += y; }
+      mt /= sh.length; my /= sh.length;
+      let num = 0, den = 0;
+      for (const [t, y] of sh) { num += (t - mt) * (y - my); den += (t - mt) ** 2; }
+      const slope = den > 0 ? num / den : 0;
+      this.trending = Math.abs(slope) > 0.15;
+      // Measurement filtering delays the size estimate by ~0.3 s; look that far ahead.
+      if (Math.abs(slope) > 0.08) lead = Math.exp(clamp(slope * 0.3, -0.3, 0.3));
+      // Feed-forward: desired zoom ∝ 1/size, so it changes at -slope (ln units/s).
+      this.goalRate = this.trending ? clamp(-slope, -1.5, 1.5) : 0;
+    } else {
+      this.trending = false; this.goalRate = 0;
+    }
+
+    let desired = this.angular != null ? this.targetCoverage / (this.angular * lead) : Math.exp(this.x);
+    if (truncated) desired = Math.min(desired, Math.exp(this.x));
+
+    // Framing cap. Zoom can't pan, so it must leave room for where the subject has been
+    // moving: the cap uses the span of the subject's centre over the last 1.5 s plus a
+    // short look-ahead, padded by its current half-size, all in angular coordinates
+    // (where an edge e lands at 0.5 + (e - 0.5)·z at zoom z).
+    const a = box.toAngular(zf);
+    const vel = snap.velocity || [0, 0];
+    this.centers.push([now, a.cx, a.cy]);
+    while (this.centers.length && now - this.centers[0][0] > 1.5) this.centers.shift();
+    let x0 = a.cx + vel[0] * 0.4, x1 = x0, y0 = a.cy + vel[1] * 0.4, y1 = y0;
+    for (const [, cx, cy] of this.centers) {
+      x0 = Math.min(x0, cx); x1 = Math.max(x1, cx); y0 = Math.min(y0, cy); y1 = Math.max(y1, cy);
+    }
+    const span = [x0 - a.w / 2, x1 + a.w / 2, y0 - a.h / 2, y1 + a.h / 2];
+    let cap = Infinity;
+    for (const e of span) {
+      const d = Math.abs(e - 0.5);
+      if (d > 1e-3) cap = Math.min(cap, (0.5 - this.edgeMargin) / d);
+    }
+    // Urgent: the subject is already at the edge of the current frame.
+    let nowCap = Infinity;
+    for (const e of [box.left, box.right, box.top, box.bottom]) {
+      const d = Math.abs(e - 0.5);
+      if (d > 1e-3) nowCap = Math.min(nowCap, (zf * (0.5 - this.edgeMargin * 0.5)) / d);
+    }
+    this.urgent = nowCap < zf * 0.97;
+    const capLimited = cap < desired;
+    desired = Math.min(desired, cap);
+
+    const lnD = clamp(Math.log(Math.max(desired, 1e-3)), lnMin, lnAutoMax);
+    if (this.goal == null) this.goal = this.x;
+    const needsOut = capLimited && lnD < this.x - 0.03;
+    // A subject steadily walking towards/away is followed continuously instead of in
+    // deadband-sized steps.
+    const followTrend = this.trending && Math.abs(lnD - this.x) > this.deadband * 0.35;
+    if (this.urgent || needsOut || followTrend || this.adjusting || Math.abs(lnD - this.x) > this.deadband) {
+      this.adjusting = true;
+      this.goal = lnD;
+    }
+    if (this.adjusting && !this.urgent && !this.trending && Math.abs(lnD - this.x) < this.deadband * 0.35 && Math.abs(this.v) < 0.05) {
+      this.adjusting = false;
+    }
+    if (capLimited || this.urgent || lnD <= lnMin + 1e-3 || lnD >= lnAutoMax - 1e-3 || !this.adjusting) this.goalRate = 0;
+    const atLimit = (lnD <= lnMin + 1e-3 && this.targetCoverage / (this.angular ?? 1) < min) ||
+      (lnD >= lnAutoMax - 1e-3);
+    // During a manual-zoom pause the goal keeps updating (so auto zoom resumes smoothly),
+    // but what the user sees is still their manual zoom.
+    if (now < this.manualUntil) { this.activity = 'manual'; return; }
+    this.activity = this.adjusting
+      ? (this.goal > this.x ? 'zooming-in' : 'zooming-out')
+      : (atLimit ? 'at-limit' : 'locked');
+  }
+
+  /** Advance the spring. Returns a zoom value to send to the camera, or null. */
+  step(now, dt) {
+    if (!this.enabled || now < this.manualUntil || this.goal == null) return null;
+    const { omega, maxRate } = this.speed;
+    // Zooming out is allowed to be faster: a subject growing out of frame is worse than one
+    // briefly a little small.
+    const rate = maxRate * (this.urgent ? 2 : this.goal < this.x ? 1.5 : 1)
+      * (this.activity === 'searching' ? 0.5 : 1);
+    const lnMin = Math.log(this.limits.min), lnMax = Math.log(this.limits.max);
+    let remaining = clamp(dt, 0, 0.1);
+    const lnAutoMax = Math.log(this.limits.autoMax);
+    while (remaining > 1e-6) {
+      const h = Math.min(remaining, 1 / 120);
+      // Critically damped spring towards the goal, which itself moves at goalRate: tracking a
+      // steadily approaching subject then has no steady-state lag.
+      if (this.goalRate) this.goal = clamp(this.goal + this.goalRate * h, lnMin, lnAutoMax);
+      const acc = omega * omega * (this.goal - this.x) + 2 * omega * (this.goalRate - this.v);
+      this.v = clamp(this.v + acc * h, -rate, rate);
+      this.x = clamp(this.x + this.v * h, lnMin, lnMax);
+      remaining -= h;
+    }
+    const z = Math.exp(this.x);
+    if (Math.abs(z - this.lastSent) / this.lastSent > 0.002) { this.lastSent = z; return z; }
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------------
+// Distance trend from apparent size
+// ---------------------------------------------------------------------------------
+/**
+ * Browsers expose no depth sensor or calibrated focus distance, so distance is inferred
+ * from apparent size: for a rigid subject, distance ∝ 1 / angular size. A least-squares
+ * slope of ln(angular size) over the last ~1.2 s gives the approach/recede rate.
+ * People use height (arm and leg swing make width noisy); other subjects use √area.
+ */
+class MotionEstimator {
+  constructor() { this.reset(); }
+  reset() { this.samples = []; this.ref = null; }
+  add(time, box, zoom, group) {
+    const a = group === Group.PERSON ? box.h / zoom : Math.sqrt(box.area) / zoom;
+    if (!(a > 0) || box.touchesEdge()) return;
+    if (this.ref == null) this.ref = a;
+    this.samples.push([time, Math.log(a)]);
+    while (this.samples.length && time - this.samples[0][0] > 1.2) this.samples.shift();
+  }
+  /** d ln(size)/dt: positive = approaching. */
+  get rate() {
+    const s = this.samples;
+    if (s.length < 5 || s[s.length - 1][0] - s[0][0] < 0.5) return 0;
+    let mt = 0, my = 0;
+    for (const [t, y] of s) { mt += t; my += y; }
+    mt /= s.length; my /= s.length;
+    let num = 0, den = 0;
+    for (const [t, y] of s) { num += (t - mt) * (y - my); den += (t - mt) * (t - mt); }
+    return den > 0 ? num / den : 0;
+  }
+  get trend() {
+    const r = this.rate;
+    return r > 0.12 ? 'approaching' : r < -0.12 ? 'receding' : 'steady';
+  }
+  /** Distance relative to when tracking started (2 = twice as far). */
+  get relativeDistance() {
+    if (this.ref == null || !this.samples.length) return null;
+    return this.ref / Math.exp(this.samples[this.samples.length - 1][1]);
+  }
+}
+
+// ---- camera.js ----
+// Camera access: getUserMedia stream, real hardware zoom where the browser exposes it,
+// digital zoom only as a labelled fallback, front/back switching and interruptions.
+//
+// Real zoom: Safari 17+ (iOS 17+) and Chrome on Android expose `zoom` in
+// MediaStreamTrack capabilities. Setting it drives the camera's own zoom, and on
+// multi-lens iPhones the default back camera is Apple's virtual multi-lens device, which
+// switches between ultra-wide / wide / telephoto lenses on its own as zoom changes.
+// Browsers do not say which physical lens is active, so the app never claims "optical".
+
+const QUALITY = {
+  '720p': { w: 1280, h: 720, bitrate: 5_000_000 },
+  '1080p': { w: 1920, h: 1080, bitrate: 10_000_000 },
+  '4k': { w: 3840, h: 2160, bitrate: 30_000_000 },
+};
+
+class CameraError extends Error {
+  constructor(kind, message) { super(message); this.kind = kind; }
+}
+
+class Camera {
+  constructor(video) {
+    this.video = video;
+    this.stream = null;
+    this.track = null;
+    this.facing = 'environment';
+    this.hw = null;            // { min, max, step } when hardware zoom is available
+    this.hwZoom = 1;           // last confirmed hardware zoom
+    this.digital = 1;          // digital crop factor (fallback only)
+    this.maxDigital = 4;
+    this._inFlight = false;
+    this._pending = null;
+    this.listeners = {};
+    this.caps = null;
+    this.mirrored = false;
+  }
+
+  on(evt, fn) { (this.listeners[evt] ||= []).push(fn); }
+  emit(evt, data) { (this.listeners[evt] || []).forEach((fn) => fn(data)); }
+
+  static check() {
+    if (!window.isSecureContext) return 'insecure';
+    if (!navigator.mediaDevices?.getUserMedia) return 'unsupported';
+    return null;
+  }
+
+  async start({ facing = 'environment', quality = '1080p', fps = 30, streamFactory = null, zoomDriver = null } = {}) {
+    this.zoomDriver = zoomDriver; // demo scene only: stands in for the camera's zoom control
+    this.stop();
+    this.facing = facing;
+    const q = QUALITY[quality] || QUALITY['1080p'];
+    let stream;
+    try {
+      if (streamFactory) {
+        stream = await streamFactory();
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: { ideal: facing },
+            width: { ideal: q.w },
+            height: { ideal: q.h },
+            frameRate: { ideal: fps },
+          },
+        });
+      }
+    } catch (e) {
+      if (e.name === 'NotAllowedError' || e.name === 'SecurityError') {
+        throw new CameraError('denied', 'Camera access was blocked.');
+      }
+      if (e.name === 'NotFoundError' || e.name === 'OverconstrainedError') {
+        throw new CameraError('notfound', 'No matching camera was found.');
+      }
+      if (e.name === 'NotReadableError') {
+        throw new CameraError('busy', 'Another app is using the camera.');
+      }
+      throw new CameraError('unknown', e.message || String(e));
+    }
+    this.stream = stream;
+    this.track = stream.getVideoTracks()[0];
+    this.track.addEventListener('mute', () => this.emit('interrupted'));
+    this.track.addEventListener('unmute', () => this.emit('resumed'));
+    this.track.addEventListener('ended', () => this.emit('ended'));
+
+    this.video.srcObject = stream;
+    this.video.muted = true;
+    this.video.playsInline = true;
+    await this.video.play().catch(() => {});
+    await new Promise((res) => {
+      if (this.video.videoWidth) return res();
+      this.video.addEventListener('loadedmetadata', res, { once: true });
+      setTimeout(res, 3000);
+    });
+
+    this.caps = this.track.getCapabilities ? this.track.getCapabilities() : {};
+    const settings = this.track.getSettings ? this.track.getSettings() : {};
+    const z = this.zoomDriver ? { min: this.zoomDriver.min, max: this.zoomDriver.max } : this.caps.zoom;
+    if (z && typeof z.max === 'number' && z.max > (z.min ?? 1)) {
+      this.hw = { min: z.min ?? 1, max: z.max, step: z.step || 0.01 };
+      this.hwZoom = settings.zoom ?? this.hw.min;
+    } else {
+      this.hw = null;
+      this.hwZoom = 1;
+    }
+    this.digital = 1;
+    this.mirrored = facing === 'user' && (settings.facingMode === 'user' || settings.facingMode == null);
+    this._applyDigital();
+    this.emit('started', this.describe());
+    return this.describe();
+  }
+
+  stop() {
+    if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+    this.stream = null; this.track = null;
+    this.video.srcObject = null;
+    this._pending = null; this._inFlight = false;
+  }
+
+  get active() { return !!(this.track && this.track.readyState === 'live'); }
+  get usesHardwareZoom() { return !!this.hw; }
+  get minZoom() { return this.hw ? this.hw.min : 1; }
+  get maxZoom() { return this.hw ? this.hw.max : this.maxDigital; }
+  /** Zoom of the frames being delivered right now (hardware zoom or digital crop). */
+  get zoom() { return this.hw ? this.hwZoom : this.digital; }
+
+  /** What the settings screen can offer on this camera. */
+  describe() {
+    const c = this.caps || {};
+    const maxW = Math.max(c.width?.max || 0, c.height?.max || 0);
+    const qualities = Object.keys(QUALITY).filter((k) => !maxW || Math.max(QUALITY[k].w, QUALITY[k].h) <= maxW);
+    const fpsMax = c.frameRate?.max || 30;
+    return {
+      hardwareZoom: !!this.hw, min: this.minZoom, max: this.maxZoom,
+      qualities: qualities.length ? qualities : ['720p'],
+      frameRates: fpsMax >= 59 ? [30, 60] : [30],
+      width: this.video.videoWidth, height: this.video.videoHeight,
+    };
+  }
+
+  /**
+   * Request a zoom level. Hardware zoom requests are serialised (one applyConstraints in
+   * flight, latest value wins) so a 60 Hz controller can never queue up stale requests.
+   */
+  setZoom(z) {
+    if (this.hw) {
+      const v = Math.min(this.hw.max, Math.max(this.hw.min, z));
+      if (this._inFlight) { this._pending = v; return; }
+      this._sendHw(v);
+    } else {
+      this.digital = Math.min(this.maxDigital, Math.max(1, z));
+      this._applyDigital();
+    }
+  }
+
+  async _sendHw(v) {
+    this._inFlight = true;
+    try {
+      if (this.zoomDriver) {
+        this.hwZoom = await this.zoomDriver.set(v);
+      } else {
+        await this.track.applyConstraints({ advanced: [{ zoom: v }] });
+        const s = this.track.getSettings ? this.track.getSettings() : {};
+        this.hwZoom = typeof s.zoom === 'number' ? s.zoom : v;
+      }
+    } catch (e) {
+      // Some devices refuse zoom changes mid-recording or while the track is muted;
+      // keep the last confirmed value.
+    }
+    this._inFlight = false;
+    if (this._pending != null && this.track) {
+      const p = this._pending; this._pending = null;
+      if (Math.abs(p - this.hwZoom) > 1e-3) this._sendHw(p);
+    }
+  }
+
+  _applyDigital() {
+    const s = this.hw ? 1 : this.digital;
+    const flip = this.mirrored ? -1 : 1;
+    this.video.style.transform = `scale(${s * flip}, ${s})`;
+  }
+
+  /** Converts a box from full-frame coordinates to "view" coordinates (after digital crop). */
+  frameToView(box) {
+    if (this.hw || this.digital === 1) return box;
+    return box.toFrame(this.digital); // crop about the centre = same maths as zooming
+  }
+}
+
+// ---- detector.js ----
+// On-device object detection with MediaPipe Tasks Vision (EfficientDet-Lite0, 80 COCO
+// classes: person, dog, cat, car, motorcycle, bus, bicycle, bird, horse, …).
+//
+// Everything runs in the browser (WebAssembly + WebGL). The library and model are
+// downloaded once from public CDNs and then cached by the service worker, so the camera
+// feed never leaves the phone.
+
+
+const MP_VERSION = '0.10.14';
+const MP_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
+const MODEL_URL =
+  'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite';
+
+async function loadVisionModule() {
+  try {
+    return await import(`${MP_BASE}/vision_bundle.mjs`);
+  } catch (e) {
+    return await import(`${MP_BASE}/+esm`); // jsDelivr's ESM build of the same package
+  }
+}
+
+class Detector {
+  constructor() {
+    this.ready = false;
+    this.delegate = null;
+    this.thumb = document.createElement('canvas');
+    this.thumbCtx = this.thumb.getContext('2d', { willReadFrequently: true });
+    this.lastMs = 0;
+    this.avgMs = 0;
+  }
+
+  async init(onStatus = () => {}) {
+    onStatus('Loading AI model…');
+    const vision = await loadVisionModule();
+    const { FilesetResolver, ObjectDetector } = vision;
+    const fileset = await FilesetResolver.forVisionTasks(`${MP_BASE}/wasm`);
+    const make = (delegate) => ObjectDetector.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate },
+      runningMode: 'VIDEO',
+      scoreThreshold: 0.3,
+      maxResults: 12,
+    });
+    try {
+      this.impl = await make('GPU');
+      this.delegate = 'GPU';
+    } catch (e) {
+      this.impl = await make('CPU');
+      this.delegate = 'CPU';
+    }
+    this.ready = true;
+    onStatus(null);
+  }
+
+  /**
+   * Detects objects in the current video frame. Returns detections in normalised
+   * full-frame coordinates, each with a colour signature for re-identification.
+   */
+  detect(video, timestampMs) {
+    if (!this.ready || !video.videoWidth) return [];
+    const t0 = performance.now();
+    let result;
+    try {
+      result = this.impl.detectForVideo(video, timestampMs);
+    } catch (e) {
+      return [];
+    }
+    const W = video.videoWidth, H = video.videoHeight;
+    const dets = [];
+    for (const d of result.detections || []) {
+      const bb = d.boundingBox;
+      const cat = d.categories?.[0];
+      if (!bb || !cat) continue;
+      const box = new Box(bb.originX / W, bb.originY / H, (bb.originX + bb.width) / W, (bb.originY + bb.height) / H).clamp();
+      if (box.w <= 0 || box.h <= 0) continue;
+      dets.push({ box, label: cat.categoryName || 'object', score: cat.score ?? 0 });
+    }
+    this._attachAppearance(video, dets);
+    this.lastMs = performance.now() - t0;
+    this.avgMs = this.avgMs ? this.avgMs * 0.9 + this.lastMs * 0.1 : this.lastMs;
+    return dets;
+  }
+
+  /** Colour signatures from a small thumbnail of the frame (cheap: ~200 px wide). */
+  _attachAppearance(source, dets) {
+    if (!dets.length) return;
+    const sw = source.videoWidth || source.width, sh = source.videoHeight || source.height;
+    const tw = 200, th = Math.max(1, Math.round((sh / sw) * tw));
+    if (this.thumb.width !== tw || this.thumb.height !== th) { this.thumb.width = tw; this.thumb.height = th; }
+    try {
+      this.thumbCtx.drawImage(source, 0, 0, tw, th);
+      const px = this.thumbCtx.getImageData(0, 0, tw, th).data;
+      for (const d of dets) d.appearance = Appearance.compute(px, tw, th, d.box);
+    } catch (e) { /* tainted or not ready: tracker falls back to motion only */ }
+  }
+}
+
+// ---- capture.js ----
+// Photo and video capture.
+//
+// Browsers can't write into the Photos library directly. Captures are kept in memory,
+// shown as a thumbnail, and saved through the share sheet ("Save Image" / "Save Video"
+// puts them in Photos on iPhone) or a normal download where sharing files isn't supported.
+
+
+function pickMime() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  for (const t of ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']) {
+    if (MediaRecorder.isTypeSupported?.(t)) return t;
+  }
+  return '';
+}
+
+const stamp = () => {
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+};
+
+class Capture {
+  constructor(camera) {
+    this.camera = camera;
+    this.recorder = null;
+    this.chunks = [];
+    this.audioStream = null;
+    this.audioDenied = false;
+    this.canvas = document.createElement('canvas');
+    this.ctx = this.canvas.getContext('2d');
+    this.items = [];
+    this.recordStart = 0;
+    this._drawTimer = null;
+  }
+
+  get recording() { return !!this.recorder && this.recorder.state === 'recording'; }
+  get supportsVideo() { return pickMime() !== null; }
+
+  /** Grabs the current frame at full stream resolution (cropped when digital zoom is on). */
+  async takePhoto() {
+    const v = this.camera.video;
+    const W = v.videoWidth, H = v.videoHeight;
+    if (!W || !H) throw new Error('Camera is not ready yet.');
+    const d = this.camera.usesHardwareZoom ? 1 : this.camera.digital;
+    const sw = W / d, sh = H / d;
+    this.canvas.width = Math.round(sw); this.canvas.height = Math.round(sh);
+    this.ctx.drawImage(v, (W - sw) / 2, (H - sh) / 2, sw, sh, 0, 0, this.canvas.width, this.canvas.height);
+    const blob = await new Promise((res) => this.canvas.toBlob(res, 'image/jpeg', 0.92));
+    if (!blob) throw new Error('Could not encode the photo.');
+    return this._add(blob, `SmartZoom-${stamp()}.jpg`, 'photo');
+  }
+
+  /** Microphone is requested only now, the first time a video is recorded. */
+  async _ensureAudio() {
+    if (this.audioStream?.getAudioTracks()[0]?.readyState === 'live') return this.audioStream;
+    if (this.audioDenied) return null;
+    try {
+      this.audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      return this.audioStream;
+    } catch (e) {
+      this.audioDenied = true;
+      return null;
+    }
+  }
+
+  async startRecording({ quality = '1080p', fps = 30 } = {}) {
+    const mime = pickMime();
+    if (mime === null) throw new Error('Video recording is not supported in this browser.');
+    const cam = this.camera;
+    const audio = await this._ensureAudio();
+    let videoTrack;
+    if (cam.usesHardwareZoom) {
+      // The camera itself zooms, so the raw camera track already contains the zoom.
+      videoTrack = cam.track;
+    } else {
+      // Digital-zoom fallback: record what the viewfinder shows by drawing the crop.
+      const v = cam.video;
+      this.canvas.width = v.videoWidth; this.canvas.height = v.videoHeight;
+      const draw = () => {
+        const d = cam.digital, W = v.videoWidth, H = v.videoHeight;
+        const sw = W / d, sh = H / d;
+        this.ctx.drawImage(v, (W - sw) / 2, (H - sh) / 2, sw, sh, 0, 0, this.canvas.width, this.canvas.height);
+      };
+      draw();
+      this._drawTimer = setInterval(draw, 1000 / fps);
+      videoTrack = this.canvas.captureStream(fps).getVideoTracks()[0];
+    }
+    const tracks = [videoTrack];
+    if (audio) tracks.push(audio.getAudioTracks()[0]);
+    const stream = new MediaStream(tracks);
+    const opts = { videoBitsPerSecond: (QUALITY[quality] || QUALITY['1080p']).bitrate };
+    if (mime) opts.mimeType = mime;
+    this.chunks = [];
+    this.recorder = new MediaRecorder(stream, opts);
+    this.recorder.ondataavailable = (e) => { if (e.data && e.data.size) this.chunks.push(e.data); };
+    this._stopped = new Promise((res) => { this.recorder.onstop = res; });
+    this.recorder.start(1000);
+    this.recordStart = performance.now();
+    return { withAudio: !!audio };
+  }
+
+  async stopRecording() {
+    if (!this.recorder) return null;
+    const rec = this.recorder;
+    if (rec.state !== 'inactive') rec.stop();
+    await this._stopped;
+    clearInterval(this._drawTimer); this._drawTimer = null;
+    this.recorder = null;
+    const type = rec.mimeType || 'video/mp4';
+    const blob = new Blob(this.chunks, { type });
+    this.chunks = [];
+    if (!blob.size) return null;
+    const ext = type.includes('webm') ? 'webm' : 'mp4';
+    return this._add(blob, `SmartZoom-${stamp()}.${ext}`, 'video');
+  }
+
+  _add(blob, name, kind) {
+    const item = { blob, name, kind, url: URL.createObjectURL(blob), saved: false };
+    this.items.unshift(item);
+    while (this.items.length > 12) URL.revokeObjectURL(this.items.pop().url);
+    return item;
+  }
+
+  /** Must be called from a tap (share sheets need a user gesture). */
+  async save(item) {
+    const file = new File([item.blob], item.name, { type: item.blob.type });
+    if (navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+        item.saved = true;
+        return 'shared';
+      } catch (e) {
+        if (e.name === 'AbortError') return 'cancelled';
+      }
+    }
+    const a = document.createElement('a');
+    a.href = item.url; a.download = item.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    item.saved = true;
+    return 'downloaded';
+  }
+
+  releaseAudio() {
+    this.audioStream?.getTracks().forEach((t) => t.stop());
+    this.audioStream = null;
+  }
+}
+
+// ---- demo.js ----
+// Demo / test scene. Open the app with `?demo` to replace the camera with a rendered
+// scene (people walking towards and away, a dog, a passing car and a pillar to hide
+// behind) and the AI model with a simulated detector built from the scene's ground truth.
+// The real tracker, zoom controller, UI and recording code run unchanged on top of it.
+// It exists so the whole app can be exercised without a phone (automated browser tests)
+// and so you can see how auto zoom behaves without walking around.
+
+
+
+const W = 720, H = 1280;
+
+class DemoScene {
+  constructor() {
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = W; this.canvas.height = H;
+    this.ctx = this.canvas.getContext('2d');
+    this.zoom = 1;
+    this.t0 = performance.now();
+    this.objects = [];
+    this._running = false;
+    this.speed = 1;
+  }
+
+  get time() { return ((performance.now() - this.t0) / 1000) * this.speed; }
+
+  /** Object positions in angular coordinates (zoom 1) at time t, nearest last. */
+  layout(t) {
+    const feet = (d) => 0.45 + 0.95 / d;
+    const personBox = (cx, d) => {
+      const h = 1.2 / d;
+      const w = h * 0.38 * (H / W);
+      return new Box(cx - w / 2, feet(d) - h, cx + w / 2, feet(d));
+    };
+    const objs = [];
+    // The red-jacket walker: 2–14 m away, wandering slightly side to side.
+    const dRed = 8 - 6 * Math.cos(t * 0.33);
+    objs.push({ id: 'red', label: 'person', d: dRed, box: personBox(0.5 + 0.1 * Math.sin(t * 0.45), dRed), colour: '#d8352a' });
+    // Blue walker crossing the scene at 6 m.
+    const xb = ((t * 0.09) % 1.4) - 0.2;
+    objs.push({ id: 'blue', label: 'person', d: 6, box: personBox(xb, 6), colour: '#2f62d6' });
+    // Dog trotting at 4 m.
+    const dx = 0.3 + 0.15 * Math.sin(t * 0.7), dh = 0.08, dw = dh * 1.6 * (H / W) * 0.5;
+    objs.push({ id: 'dog', label: 'dog', d: 4, box: new Box(dx - dw / 2, feet(4) - dh, dx + dw / 2, feet(4)), colour: '#8a5a2b' });
+    // Car passing far away every ~16 s.
+    const xc = ((t * 0.075) % 1.2) - 0.1, ch = 0.06, cw = ch * 2.4 * (H / W) * 0.56;
+    objs.push({ id: 'car', label: 'car', d: 20, box: new Box(xc - cw / 2, feet(20) - ch, xc + cw / 2, feet(20)), colour: '#1f8f86' });
+    objs.sort((a, b) => b.d - a.d);
+    return objs;
+  }
+
+  get pillar() { return { box: new Box(0.62, 0.05, 0.7, 1.2), d: 3 }; }
+
+  render() {
+    const t = this.time, z = this.zoom, c = this.ctx;
+    const X = (x) => (0.5 + (x - 0.5) * z) * W, Y = (y) => (0.5 + (y - 0.5) * z) * H;
+    // sky and ground
+    const horizon = Y(0.45);
+    const sky = c.createLinearGradient(0, 0, 0, horizon);
+    sky.addColorStop(0, '#8fb3d9'); sky.addColorStop(1, '#d9e4ee');
+    c.fillStyle = sky; c.fillRect(0, 0, W, Math.max(0, horizon));
+    const ground = c.createLinearGradient(0, horizon, 0, H);
+    ground.addColorStop(0, '#9aa38c'); ground.addColorStop(1, '#5d6a4f');
+    c.fillStyle = ground; c.fillRect(0, horizon, W, H - horizon);
+    // distant trees for texture
+    c.fillStyle = '#6f8466';
+    for (let i = 0; i < 14; i++) {
+      const x = i / 13, h = 0.03 + 0.02 * ((i * 7) % 3);
+      c.beginPath(); c.ellipse(X(x), Y(0.45 - h / 2), 0.03 * z * W, h * z * H * 0.6, 0, 0, 7); c.fill();
+    }
+    const objs = this.layout(t);
+    this.lastLayout = { t, z, objs };
+    const pillar = this.pillar;
+    let pillarDrawn = false;
+    const drawPillar = () => {
+      const b = pillar.box;
+      c.fillStyle = '#b7b2a6'; c.fillRect(X(b.left), Y(b.top), (b.right - b.left) * z * W, (b.bottom - b.top) * z * H);
+      c.fillStyle = 'rgba(0,0,0,0.12)'; c.fillRect(X(b.right) - 0.012 * z * W, Y(b.top), 0.012 * z * W, (b.bottom - b.top) * z * H);
+      pillarDrawn = true;
+    };
+    for (const o of objs) {
+      if (!pillarDrawn && o.d < pillar.d) drawPillar();
+      const b = o.box;
+      const x0 = X(b.left), y0 = Y(b.top), w = (b.right - b.left) * z * W, h = (b.bottom - b.top) * z * H;
+      if (o.label === 'person') {
+        c.fillStyle = '#e2b796'; c.beginPath(); c.arc(x0 + w / 2, y0 + h * 0.08, h * 0.075, 0, 7); c.fill();
+        c.fillStyle = o.colour; sceneRoundRect(c, x0 + w * 0.08, y0 + h * 0.17, w * 0.84, h * 0.42, w * 0.2); c.fill();
+        c.fillStyle = '#2b2d33';
+        const step = Math.sin(t * 6 + o.d) * w * 0.12;
+        c.fillRect(x0 + w * 0.2 + step, y0 + h * 0.58, w * 0.24, h * 0.42);
+        c.fillRect(x0 + w * 0.56 - step, y0 + h * 0.58, w * 0.24, h * 0.42);
+      } else if (o.label === 'dog') {
+        c.fillStyle = o.colour; sceneRoundRect(c, x0, y0 + h * 0.25, w * 0.8, h * 0.45, h * 0.2); c.fill();
+        c.beginPath(); c.arc(x0 + w * 0.85, y0 + h * 0.3, h * 0.22, 0, 7); c.fill();
+        c.fillRect(x0 + w * 0.08, y0 + h * 0.6, w * 0.1, h * 0.4); c.fillRect(x0 + w * 0.6, y0 + h * 0.6, w * 0.1, h * 0.4);
+      } else {
+        c.fillStyle = o.colour; sceneRoundRect(c, x0, y0 + h * 0.3, w, h * 0.5, h * 0.15); c.fill();
+        sceneRoundRect(c, x0 + w * 0.2, y0, w * 0.55, h * 0.45, h * 0.15); c.fill();
+        c.fillStyle = '#1d1f22';
+        c.beginPath(); c.arc(x0 + w * 0.22, y0 + h * 0.85, h * 0.15, 0, 7); c.arc(x0 + w * 0.78, y0 + h * 0.85, h * 0.15, 0, 7); c.fill();
+      }
+    }
+    if (!pillarDrawn) drawPillar();
+  }
+
+  start() {
+    if (this._running) return this.canvas.captureStream(30);
+    this._running = true;
+    const loop = () => { if (!this._running) return; this.render(); requestAnimationFrame(loop); };
+    loop();
+    return this.canvas.captureStream(30);
+  }
+
+  stop() { this._running = false; }
+
+  zoomDriver() {
+    return {
+      min: 1, max: 10,
+      set: async (v) => { await new Promise((r) => setTimeout(r, 30)); this.zoom = v; return v; },
+    };
+  }
+}
+
+function sceneRoundRect(c, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  c.beginPath();
+  c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+
+/** Stand-in for the AI model: ground truth + noise + misses, colours from real pixels. */
+class DemoDetector extends Detector {
+  constructor(scene) { super(); this.scene = scene; this.delegate = 'demo'; }
+  async init(onStatus = () => {}) { this.ready = true; onStatus(null); }
+  detect(video) {
+    const L = this.scene.lastLayout;
+    if (!L) return [];
+    const t0 = performance.now();
+    const pillar = this.scene.pillar.box;
+    const dets = [];
+    for (const o of L.objs) {
+      const a = o.box;
+      if (o.d > this.scene.pillar.d) {
+        const overlap = Math.max(0, Math.min(a.right, pillar.right) - Math.max(a.left, pillar.left));
+        if (overlap > 0.55 * a.w) continue; // hidden behind the pillar
+      }
+      const f = a.toFrame(L.z).clamp();
+      if (f.w < 0.004 || f.h < 0.004) continue;
+      const cov = f.coverage;
+      if (Math.random() < 0.04 + (cov < 0.05 ? 0.3 : 0)) continue;
+      const j = () => (Math.random() - 0.5) * 0.04;
+      dets.push({
+        box: new Box(f.left + j() * f.w, f.top + j() * f.h, f.right + j() * f.w, f.bottom + j() * f.h).clamp(),
+        label: o.label, score: 0.6 + Math.random() * 0.3,
+      });
+    }
+    this._attachAppearance(video, dets);
+    this.lastMs = performance.now() - t0;
+    return dets;
+  }
+}
+
+// ---- app.js ----
+// SmartZoom app: wires camera, detector, tracker, zoom controller and UI together.
+
+
+
+
+
+
+const params = new URLSearchParams(location.search);
+const DEMO = params.has('demo');
+const $ = (id) => document.getElementById(id);
+
+// ------------------------------------------------------------------ settings
+const DEFAULTS = {
+  size: 'medium', speed: 'normal', sensitivity: 'balanced', autoZoom: true, maxAuto: '5',
+  camera: 'environment', quality: '1080p', fps: 30, battery: false, follow: true,
+};
+const SENSITIVITY = { strict: 0.15, balanced: 0.5, eager: 0.85 };
+let settings = { ...DEFAULTS };
+try { Object.assign(settings, JSON.parse(localStorage.getItem('smartzoom.settings') || '{}')); } catch (e) { /* private mode */ }
+const saveSettings = () => { try { localStorage.setItem('smartzoom.settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } };
+
+// ------------------------------------------------------------------ objects
+const video = $('preview');
+const overlay = $('overlay');
+const octx = overlay.getContext('2d');
+const camera = new Camera(video);
+const scene = DEMO ? new DemoScene() : null;
+const detector = DEMO ? new DemoDetector(scene) : new Detector();
+const tracker = new SubjectTracker({ sensitivity: SENSITIVITY[settings.sensitivity] });
+const zoomCtl = new AutoZoomController();
+const motion = new MotionEstimator();
+const capture = new Capture(camera);
+
+const state = {
+  running: false, paused: false, mode: 'photo',
+  dets: [], detTime: 0, detZoom: 1, nextDetAt: 0,
+  modelStatus: 'idle', // idle | loading | ready | failed
+  lastFrame: 0, statusAt: 0, flashUntil: 0, starting: false,
+  wakeLock: null,
+};
+window.__smartzoom = { camera, tracker, zoomCtl, detector, scene, state, settings: () => settings, viewToScreen: (x, y) => viewToScreen(x, y) };
+
+function applySettingsToCore() {
+  tracker.setSensitivity(SENSITIVITY[settings.sensitivity] ?? 0.5);
+  zoomCtl.targetCoverage = SubjectSize[settings.size] ?? SubjectSize.medium;
+  zoomCtl.speed = ZoomSpeed[settings.speed] ?? ZoomSpeed.normal;
+  zoomCtl.setLimits(camera.minZoom, camera.maxZoom, autoMax());
+}
+function autoMax() {
+  if (settings.maxAuto === 'max') return camera.maxZoom;
+  return Math.min(camera.maxZoom, Number(settings.maxAuto) || 5);
+}
+
+// ------------------------------------------------------------------ gate / permissions
+const GATES = {
+  intro: {
+    title: 'SmartZoom',
+    body: '<p>Tap a person, pet or vehicle and the camera keeps it framed, zooming in as it moves away and out as it comes closer.</p><p>It needs your camera. Everything is processed on this phone and nothing is uploaded.</p>',
+    action: 'Turn on camera',
+  },
+  denied: {
+    title: 'Camera access is off',
+    body: '<p>SmartZoom can’t see anything until camera access is allowed for this site.</p><ol><li>In Safari, tap <b>aA</b> in the address bar, then <b>Website Settings</b>.</li><li>Set <b>Camera</b> to <b>Allow</b>.</li><li>Using the Home Screen app? Open <b>Settings › Apps › Safari › Camera</b> and choose <b>Allow</b>.</li></ol>',
+    action: 'Try again',
+  },
+  busy: { title: 'The camera is busy', body: '<p>Another app is using the camera. Close it, then try again.</p>', action: 'Try again' },
+  notfound: { title: 'No camera found', body: '<p>This device didn’t offer a camera that matches. Try the other camera, or check that no other app is using it.</p>', action: 'Try again' },
+  insecure: { title: 'Open this page securely', body: '<p>Browsers only allow the camera on pages served over <b>https://</b>. Open the app from its https address.</p>', action: null },
+  unsupported: { title: 'This browser can’t use the camera', body: '<p>Open this page in Safari (iOS 17 or later) or Chrome. Camera access isn’t available inside some in-app browsers.</p>', action: null },
+  unknown: { title: 'The camera didn’t start', body: '<p>Something stopped the camera from starting. Try again; if it keeps happening, restart the app.</p>', action: 'Try again' },
+};
+function showGate(kind, detail) {
+  const g = GATES[kind] || GATES.unknown;
+  $('gateBody').innerHTML = `<h1>${g.title}</h1>${g.body}${detail ? `<p style="font-size:13px">${detail}</p>` : ''}${g.action ? `<button class="primary" id="gateAction">${g.action}</button>` : ''}`;
+  $('gate').hidden = false;
+  const btn = $('gateAction');
+  if (btn) btn.onclick = () => startCamera();
+}
+const hideGate = () => { $('gate').hidden = true; };
+
+// ------------------------------------------------------------------ camera lifecycle
+async function startCamera() {
+  if (state.starting) return;
+  state.starting = true;
+  setStatus('idle', 'Starting camera', '');
+  try {
+    const quality = settings.battery ? '720p' : settings.quality;
+    const fps = settings.battery ? 30 : settings.fps;
+    await camera.start({
+      facing: settings.camera, quality, fps,
+      streamFactory: DEMO ? async () => scene.start() : null,
+      zoomDriver: DEMO ? scene.zoomDriver() : null,
+    });
+  } catch (e) {
+    state.starting = false;
+    showGate(e instanceof CameraError ? e.kind : 'unknown', e instanceof CameraError ? '' : e.message);
+    return;
+  }
+  state.starting = false;
+  try { localStorage.setItem('smartzoom.granted', '1'); } catch (e) { /* ignore */ }
+  hideGate();
+  state.running = true; state.paused = false;
+  $('paused').hidden = true;
+  tracker.reset(); motion.reset();
+  applySettingsToCore();
+  zoomCtl.reset(camera.zoom);
+  state.dets = [];
+  requestWakeLock();
+  loadModel();
+  updateZoomUi(true);
+}
+
+async function loadModel() {
+  if (state.modelStatus === 'ready' || state.modelStatus === 'loading') return;
+  state.modelStatus = 'loading';
+  try {
+    await detector.init();
+    state.modelStatus = 'ready';
+  } catch (e) {
+    console.error(e);
+    state.modelStatus = 'failed';
+    toast('The AI model didn’t download. Check your connection, then reopen the app. It’s only needed once.', 6000);
+  }
+}
+
+function pauseCamera(message) {
+  if (capture.recording) finishRecording();
+  camera.stop();
+  scene?.stop();
+  state.running = false; state.paused = true;
+  if (message) { $('paused').textContent = message; $('paused').hidden = false; }
+  releaseWakeLock();
+}
+
+camera.on('interrupted', () => {
+  $('paused').textContent = 'The camera is paused by iOS, for example during a call. It will continue on its own.';
+  $('paused').hidden = false;
+});
+camera.on('resumed', () => { $('paused').hidden = true; });
+camera.on('ended', () => {
+  if (document.visibilityState === 'visible' && state.running) setTimeout(() => startCamera(), 500);
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') pauseCamera();
+  else if (state.paused) startCamera(); // only resume a camera the user already turned on
+});
+window.addEventListener('pagehide', () => pauseCamera());
+
+async function requestWakeLock() {
+  try { state.wakeLock = await navigator.wakeLock?.request('screen'); } catch (e) { /* optional */ }
+}
+function releaseWakeLock() { try { state.wakeLock?.release(); } catch (e) { /* ignore */ } state.wakeLock = null; }
+
+// ------------------------------------------------------------------ geometry helpers
+function coverRect() {
+  const vw = video.videoWidth || 9, vh = video.videoHeight || 16;
+  const cw = overlay.clientWidth, ch = overlay.clientHeight;
+  const s = Math.max(cw / vw, ch / vh);
+  const dw = vw * s, dh = vh * s;
+  return { ox: (cw - dw) / 2, oy: (ch - dh) / 2, dw, dh, cw, ch };
+}
+function viewToScreen(x, y) {
+  const r = coverRect();
+  let sx = r.ox + x * r.dw;
+  if (camera.mirrored) sx = r.cw - sx;
+  return [sx, r.oy + y * r.dh];
+}
+function screenToView(sx, sy) {
+  const r = coverRect();
+  if (camera.mirrored) sx = r.cw - sx;
+  return [(sx - r.ox) / r.dw, (sy - r.oy) / r.dh];
+}
+
+// ------------------------------------------------------------------ main loop
+function loop(tms) {
+  requestAnimationFrame(loop);
+  const now = tms / 1000;
+  const dt = state.lastFrame ? Math.min(0.1, now - state.lastFrame) : 1 / 60;
+  state.lastFrame = now;
+  if (!state.running || !camera.active) { drawOverlay(now); return; }
+
+  // Detection. Frames are dropped, never queued: if the model is slower than the camera
+  // the next detection simply waits, so the UI never stalls behind a backlog.
+  if (settings.follow && state.modelStatus === 'ready' && now >= state.nextDetAt && video.readyState >= 2) {
+    const frameZoom = camera.zoom;
+    const raw = detector.detect(video, tms);
+    const dets = [];
+    for (const d of raw) {
+      const box = camera.frameToView(d.box);
+      const c = box.clamp();
+      if (c.w > 0.003 && c.h > 0.003) dets.push({ ...d, box: c });
+    }
+    state.dets = dets; state.detTime = now; state.detZoom = frameZoom;
+    if (tracker.active) {
+      const snap = tracker.update(dets, now, frameZoom);
+      zoomCtl.ingest(snap, now);
+      if (snap.measuredBox) motion.add(now, snap.measuredBox, frameZoom, snap.group);
+    }
+    const busy = (detector.avgMs || 20) / 1000;
+    const minGap = settings.battery ? 1 / 8 : 1 / 30;
+    // Leave the main thread at least as much free time as detection takes.
+    state.nextDetAt = now + Math.max(minGap, busy * 1.6);
+  }
+
+  zoomCtl.enabled = settings.autoZoom && tracker.active;
+  const z = zoomCtl.step(now, dt);
+  if (z != null) camera.setZoom(z);
+
+  drawOverlay(now);
+  updateZoomUi(false);
+  if (now - state.statusAt > 0.2) { state.statusAt = now; updateStatus(); }
+}
+
+// ------------------------------------------------------------------ overlay drawing
+const COLORS = { tracking: '#ffc24b', reacquiring: '#a9c3ff', lost: '#ff6f61', candidate: 'rgba(244,245,241,0.55)' };
+function sizeCanvas(c) {
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  return dpr;
+}
+function corners(ctx, x, y, w, h, len, dashed) {
+  ctx.setLineDash(dashed ? [5, 5] : []);
+  ctx.beginPath();
+  ctx.moveTo(x, y + len); ctx.lineTo(x, y); ctx.lineTo(x + len, y);
+  ctx.moveTo(x + w - len, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + len);
+  ctx.moveTo(x + w, y + h - len); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - len, y + h);
+  ctx.moveTo(x + len, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - len);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+function screenRect(b) {
+  const [x0, y0] = viewToScreen(b.left, b.top);
+  const [x1, y1] = viewToScreen(b.right, b.bottom);
+  return { x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) };
+}
+function drawOverlay(now) {
+  const dpr = sizeCanvas(overlay);
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  octx.clearRect(0, 0, overlay.clientWidth, overlay.clientHeight);
+  if (now < state.flashUntil) {
+    octx.fillStyle = `rgba(255,255,255,${(state.flashUntil - now) / 0.18 * 0.8})`;
+    octx.fillRect(0, 0, overlay.clientWidth, overlay.clientHeight);
+  }
+  if (!state.running) return;
+  octx.lineCap = 'round'; octx.lineJoin = 'round';
+
+  if (!tracker.active && settings.follow) {
+    // Faint markers show what can be tapped.
+    octx.strokeStyle = COLORS.candidate; octx.lineWidth = 1.5;
+    const shown = state.dets.filter((d) => d.score >= 0.45).slice(0, 8);
+    for (const d of shown) {
+      const r = screenRect(d.box);
+      corners(octx, r.x, r.y, r.w, r.h, Math.min(14, r.w / 3, r.h / 3), false);
+    }
+    return;
+  }
+  if (!tracker.active) return;
+  const b = tracker.displayBox(now, camera.zoom);
+  if (!b) return;
+  const r = screenRect(b);
+  const st = tracker.state;
+  const color = COLORS[st] || COLORS.tracking;
+  const len = Math.max(10, Math.min(r.w, r.h) * 0.22);
+  octx.strokeStyle = color;
+  if (st === TrackState.TRACKING) {
+    octx.globalAlpha = 1; octx.lineWidth = 3;
+    corners(octx, r.x, r.y, r.w, r.h, len, false);
+    octx.globalAlpha = 0.18; octx.lineWidth = 1;
+    octx.strokeRect(r.x, r.y, r.w, r.h);
+  } else if (st === TrackState.REACQUIRING) {
+    octx.globalAlpha = 0.55 + 0.35 * Math.sin(now * 6); octx.lineWidth = 2.5;
+    const pad = 10;
+    corners(octx, r.x - pad, r.y - pad, r.w + pad * 2, r.h + pad * 2, len, true);
+  } else {
+    octx.globalAlpha = 0.5; octx.lineWidth = 2;
+    corners(octx, r.x, r.y, r.w, r.h, len, true);
+  }
+  octx.globalAlpha = 1;
+  // Name tag above the box.
+  if (st === TrackState.TRACKING && r.w > 30) {
+    const label = cap(tracker.label);
+    octx.font = '600 13px -apple-system, system-ui, sans-serif';
+    const tw = octx.measureText(label).width + 14;
+    const ty = r.y - 26 < 8 ? r.y + r.h + 6 : r.y - 26;
+    octx.fillStyle = 'rgba(255,194,75,0.92)';
+    roundRect(octx, r.x, ty, tw, 20, 6); octx.fill();
+    octx.fillStyle = '#1a1406'; octx.fillText(label, r.x + 7, ty + 14.5);
+  }
+}
+function roundRect(c, x, y, w, h, rr) {
+  c.beginPath(); c.moveTo(x + rr, y); c.arcTo(x + w, y, x + w, y + h, rr); c.arcTo(x + w, y + h, x, y + h, rr);
+  c.arcTo(x, y + h, x, y, rr); c.arcTo(x, y, x + w, y, rr); c.closePath();
+}
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : 'Subject');
+
+// ------------------------------------------------------------------ status
+function setStatus(kind, main, sub) {
+  const el = $('status');
+  if (el.dataset.state !== kind) el.dataset.state = kind;
+  if ($('statusMain').textContent !== main) $('statusMain').textContent = main;
+  if ($('statusSub').textContent !== sub) $('statusSub').textContent = sub;
+}
+const fmtZoom = (z) => `${z < 10 ? z.toFixed(1) : Math.round(z)}×`;
+function updateStatus() {
+  const idleHint = settings.follow && !tracker.active && state.modelStatus === 'ready' && state.running;
+  $('hint').style.opacity = idleHint && !capture.recording ? '1' : '0';
+  $('stopBtn').hidden = !tracker.active;
+  if (!state.running) return;
+  const zoomTxt = `${fmtZoom(camera.zoom)} ${camera.usesHardwareZoom ? 'camera zoom' : 'digital zoom'}`;
+  if (!settings.follow) return setStatus('idle', 'AI tracking is off', zoomTxt);
+  if (state.modelStatus === 'loading') return setStatus('idle', 'Loading AI model', 'First launch downloads about 15 MB');
+  if (state.modelStatus === 'failed') return setStatus('lost', 'AI model unavailable', 'Check your connection and reopen');
+  const label = tracker.label || 'subject';
+  switch (tracker.state) {
+    case TrackState.IDLE:
+      return setStatus('idle', 'Tap a subject to follow', zoomTxt);
+    case TrackState.TRACKING: {
+      const act = !settings.autoZoom ? 'auto zoom off'
+        : ({ 'zooming-in': 'zooming in', 'zooming-out': 'zooming out', 'at-limit': 'at zoom limit', manual: 'manual zoom', locked: 'framed' })[zoomCtl.activity] || 'framed';
+      const trend = { approaching: ', getting closer', receding: ', moving away' }[motion.trend] || '';
+      return setStatus('tracking', `Following the ${label}`, `${fmtZoom(camera.zoom)}, ${act}${trend}`);
+    }
+    case TrackState.REACQUIRING:
+      return setStatus('reacquiring', `Looking for the ${label}`,
+        zoomCtl.activity === 'searching' && settings.autoZoom ? 'Widening the view to find it' : 'Holding zoom');
+    case TrackState.LOST:
+      return setStatus('lost', `Lost the ${label}`, 'Still searching. Tap it when you see it');
+    default: return undefined;
+  }
+}
+
+let toastTimer = 0;
+function toast(msg, ms = 2600) {
+  const t = $('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+// ------------------------------------------------------------------ tap, pinch
+const pointers = new Map();
+let pinch = null;
+overlay.addEventListener('pointerdown', (e) => {
+  overlay.setPointerCapture?.(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now() });
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), z0: camera.zoom };
+  }
+});
+overlay.addEventListener('pointermove', (e) => {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  p.x = e.clientX; p.y = e.clientY;
+  if (pinch && pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinch.d0 > 10) manualZoom(pinch.z0 * (d / pinch.d0));
+  }
+});
+const endPointer = (e) => {
+  const p = pointers.get(e.pointerId);
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) {
+    const wasPinch = !!pinch;
+    if (pointers.size === 0) pinch = null;
+    if (wasPinch) return;
+  }
+  if (e.type === 'pointerup' && p && Math.hypot(p.x - p.x0, p.y - p.y0) < 12 && performance.now() - p.t0 < 500) {
+    const rect = overlay.getBoundingClientRect();
+    onTap(e.clientX - rect.left, e.clientY - rect.top);
+  }
+};
+overlay.addEventListener('pointerup', endPointer);
+overlay.addEventListener('pointercancel', endPointer);
+
+function onTap(sx, sy) {
+  if (!state.running) return;
+  if (!settings.follow) return toast('Turn on AI tracking to follow a subject.');
+  if (state.modelStatus !== 'ready') return toast('The AI model is still loading.');
+  const [x, y] = screenToView(sx, sy);
+  const picked = tracker.select(x, y, state.dets, state.detTime, state.detZoom);
+  if (!picked) {
+    toast('Nothing to follow there. Tap directly on a person, animal or vehicle.');
+    return;
+  }
+  motion.reset();
+  zoomCtl.reset(camera.zoom);
+  applySettingsToCore();
+}
+
+function manualZoom(z) {
+  const v = Math.min(camera.maxZoom, Math.max(camera.minZoom, z));
+  camera.setZoom(v);
+  zoomCtl.manual(v, performance.now() / 1000);
+  updateZoomUi(true);
+}
+
+// ------------------------------------------------------------------ zoom dial
+const dial = $('dial'), dialCanvas = $('dialCanvas'), dctx = dialCanvas.getContext('2d');
+const TICKS = [0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 60, 80, 100];
+const MAJOR = new Set([0.5, 1, 2, 3, 5, 10, 15, 20, 30, 50, 100]);
+let dialDrag = null, lastDialZoom = -1, lastGoal = -1;
+function updateZoomUi(force) {
+  const z = camera.zoom;
+  const goal = zoomCtl.enabled && zoomCtl.goal != null ? Math.exp(zoomCtl.goal) : null;
+  if (!force && Math.abs(z - lastDialZoom) < 0.002 && (goal == null ? lastGoal === -1 : Math.abs(goal - lastGoal) < 0.01)) return;
+  lastDialZoom = z; lastGoal = goal ?? -1;
+  $('zoomReadout').innerHTML = `${fmtZoom(z)}${camera.usesHardwareZoom ? '' : '<small>digital</small>'}`;
+  dial.setAttribute('aria-valuenow', z.toFixed(1));
+  dial.setAttribute('aria-valuemin', camera.minZoom.toFixed(1));
+  dial.setAttribute('aria-valuemax', camera.maxZoom.toFixed(1));
+  drawDial(z, goal);
+}
+function drawDial(z, goal) {
+  const dpr = sizeCanvas(dialCanvas);
+  const W = dialCanvas.clientWidth, H = dialCanvas.clientHeight;
+  dctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  dctx.clearRect(0, 0, W, H);
+  const pxPerLn = W / 2.2, cx = W / 2, base = H - 6;
+  const X = (v) => cx + (Math.log(v) - Math.log(z)) * pxPerLn;
+  const lo = camera.minZoom, hi = camera.maxZoom;
+  dctx.font = '600 12px "Barlow Semi Condensed", system-ui, sans-serif';
+  dctx.textAlign = 'center';
+  for (const t of TICKS) {
+    const x = X(t);
+    if (x < -20 || x > W + 20) continue;
+    const inRange = t >= lo - 1e-6 && t <= hi + 1e-6;
+    const fade = Math.max(0, 1 - Math.abs(x - cx) / (W * 0.55));
+    const major = MAJOR.has(t);
+    dctx.globalAlpha = (inRange ? 0.9 : 0.18) * (0.25 + 0.75 * fade);
+    dctx.strokeStyle = '#f4f5f1'; dctx.lineWidth = major ? 2 : 1.2;
+    dctx.beginPath(); dctx.moveTo(x, base); dctx.lineTo(x, base - (major ? 16 : 9)); dctx.stroke();
+    if (major && Math.abs(x - cx) > 24) { dctx.fillStyle = '#f4f5f1'; dctx.fillText(`${t}`, x, base - 21); }
+  }
+  dctx.globalAlpha = 1;
+  // Where auto zoom is heading.
+  if (goal != null && settings.autoZoom) {
+    const gx = X(goal);
+    if (gx > 0 && gx < W) {
+      dctx.fillStyle = '#ffc24b';
+      dctx.beginPath(); dctx.moveTo(gx, base - 20); dctx.lineTo(gx - 6, base - 30); dctx.lineTo(gx + 6, base - 30); dctx.closePath(); dctx.fill();
+    }
+  }
+  // Centre index line.
+  dctx.strokeStyle = '#ffc24b'; dctx.lineWidth = 2.5; dctx.lineCap = 'round';
+  dctx.beginPath(); dctx.moveTo(cx, base + 2); dctx.lineTo(cx, base - 22); dctx.stroke();
+}
+dial.addEventListener('pointerdown', (e) => {
+  dial.setPointerCapture?.(e.pointerId);
+  dialDrag = { x0: e.clientX, ln0: Math.log(camera.zoom) };
+});
+dial.addEventListener('pointermove', (e) => {
+  if (!dialDrag) return;
+  const pxPerLn = dialCanvas.clientWidth / 2.2;
+  manualZoom(Math.exp(dialDrag.ln0 - (e.clientX - dialDrag.x0) / pxPerLn));
+});
+const endDial = () => { dialDrag = null; };
+dial.addEventListener('pointerup', endDial);
+dial.addEventListener('pointercancel', endDial);
+dial.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { manualZoom(camera.zoom * 1.1); e.preventDefault(); }
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { manualZoom(camera.zoom / 1.1); e.preventDefault(); }
+});
+
+// ------------------------------------------------------------------ toggles
+function syncToggles() {
+  $('followBtn').setAttribute('aria-pressed', String(settings.follow));
+  $('autoZoomBtn').setAttribute('aria-pressed', String(settings.autoZoom));
+}
+$('followBtn').onclick = () => {
+  settings.follow = !settings.follow; saveSettings(); syncToggles();
+  if (!settings.follow) { tracker.reset(); zoomCtl.reset(camera.zoom); state.dets = []; }
+  toast(settings.follow ? 'AI tracking on. Tap a subject to follow it.' : 'AI tracking off.');
+  updateStatus();
+};
+$('autoZoomBtn').onclick = () => {
+  settings.autoZoom = !settings.autoZoom; saveSettings(); syncToggles();
+  if (settings.autoZoom) zoomCtl.reset(camera.zoom);
+  toast(settings.autoZoom ? 'Auto zoom on.' : 'Auto zoom off. Pinch or drag the scale to zoom.');
+  updateStatus(); updateZoomUi(true);
+};
+$('stopBtn').onclick = () => { tracker.reset(); zoomCtl.reset(camera.zoom); motion.reset(); updateStatus(); };
+$('flipBtn').onclick = async () => {
+  if (capture.recording) return toast('Stop recording before switching camera.');
+  settings.camera = settings.camera === 'user' ? 'environment' : 'user'; saveSettings();
+  await startCamera();
+  renderSettings();
+};
+
+// ------------------------------------------------------------------ capture
+document.querySelectorAll('.modes button').forEach((b) => {
+  b.onclick = () => {
+    if (capture.recording) return;
+    state.mode = b.dataset.mode;
+    document.querySelectorAll('.modes button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    $('shutter').dataset.mode = state.mode;
+    $('shutter').setAttribute('aria-label', state.mode === 'photo' ? 'Take photo' : 'Start recording');
+  };
+});
+let recTimer = 0;
+$('shutter').onclick = async () => {
+  if (!state.running) return;
+  if (state.mode === 'photo') {
+    try {
+      const item = await capture.takePhoto();
+      state.flashUntil = performance.now() / 1000 + 0.18;
+      addToTray(item);
+    } catch (e) { toast(e.message); }
+    return;
+  }
+  if (capture.recording) return finishRecording();
+  try {
+    const { withAudio } = await capture.startRecording({
+      quality: settings.battery ? '720p' : settings.quality, fps: settings.fps,
+    });
+    $('shutter').dataset.recording = 'true';
+    $('shutter').setAttribute('aria-label', 'Stop recording');
+    $('recTimer').hidden = false;
+    $('flipBtn').disabled = true;
+    const t0 = performance.now();
+    recTimer = setInterval(() => {
+      const s = Math.floor((performance.now() - t0) / 1000);
+      $('recTimer').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    }, 250);
+    if (!withAudio) toast('Recording without sound: microphone access is off.');
+  } catch (e) { toast(e.message || 'Recording could not start.'); }
+};
+async function finishRecording() {
+  clearInterval(recTimer);
+  $('shutter').dataset.recording = 'false';
+  $('shutter').setAttribute('aria-label', 'Start recording');
+  $('recTimer').hidden = true; $('recTimer').textContent = '0:00';
+  $('flipBtn').disabled = false;
+  const item = await capture.stopRecording();
+  if (item) { addToTray(item); toast('Video ready. Tap the thumbnail to save it.'); }
+}
+
+function addToTray(item) {
+  const btn = $('trayBtn');
+  btn.disabled = false;
+  if (item.kind === 'photo') btn.style.backgroundImage = `url(${item.url})`;
+  else {
+    // Use a frame of the video as the thumbnail.
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.src = item.url;
+    v.addEventListener('loadeddata', () => {
+      const c = document.createElement('canvas'); c.width = 96; c.height = 128;
+      try { c.getContext('2d').drawImage(v, 0, 0, 96, 128); btn.style.backgroundImage = `url(${c.toDataURL('image/jpeg', 0.7)})`; } catch (e) { /* ignore */ }
+    }, { once: true });
+  }
+  renderTray();
+}
+function renderTray() {
+  const grid = $('trayGrid');
+  grid.innerHTML = '';
+  if (!capture.items.length) { grid.innerHTML = '<div class="tray-empty">Photos and videos you take appear here.</div>'; return; }
+  for (const item of capture.items) {
+    const cell = document.createElement('button');
+    cell.className = 'tray-item' + (item.saved ? ' saved' : '');
+    cell.setAttribute('aria-label', `Save ${item.kind}`);
+    cell.innerHTML = item.kind === 'photo'
+      ? `<img src="${item.url}" alt="">`
+      : `<video src="${item.url}#t=0.1" muted playsinline preload="metadata"></video>`;
+    const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = item.kind === 'photo' ? 'Photo' : 'Video';
+    cell.appendChild(badge);
+    cell.onclick = async () => {
+      const r = await capture.save(item);
+      if (r === 'shared') toast('Saved.');
+      else if (r === 'downloaded') toast('Downloaded.');
+      renderTray();
+    };
+    grid.appendChild(cell);
+  }
+}
+
+// ------------------------------------------------------------------ sheets
+function openSheet(id) {
+  const host = $(id);
+  host.classList.add('open'); host.setAttribute('aria-hidden', 'false');
+  host.querySelector('.done')?.focus({ preventScroll: true });
+}
+function closeSheet(host) { host.classList.remove('open'); host.setAttribute('aria-hidden', 'true'); }
+document.querySelectorAll('.sheet-host').forEach((host) => {
+  host.querySelectorAll('[data-close]').forEach((el) => { el.onclick = () => closeSheet(host); });
+});
+$('settingsBtn').onclick = () => { renderSettings(); openSheet('settingsHost'); };
+$('trayBtn').onclick = () => { renderTray(); openSheet('trayHost'); };
+
+function seg(key, options, { restart = false, disabled = () => false } = {}) {
+  const wrap = document.createElement('div'); wrap.className = 'seg'; wrap.setAttribute('role', 'group');
+  for (const [value, label] of options) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.setAttribute('aria-pressed', String(String(settings[key]) === String(value)));
+    b.disabled = disabled(value);
+    b.onclick = async () => {
+      settings[key] = typeof DEFAULTS[key] === 'number' ? Number(value) : value;
+      saveSettings(); applySettingsToCore(); renderSettings();
+      if (restart && !capture.recording) await startCamera();
+    };
+    wrap.appendChild(b);
+  }
+  return wrap;
+}
+function sw(key, onChange) {
+  const b = document.createElement('button');
+  b.className = 'switch'; b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', String(!!settings[key]));
+  b.onclick = async () => { settings[key] = !settings[key]; saveSettings(); syncToggles(); applySettingsToCore(); renderSettings(); await onChange?.(); };
+  return b;
+}
+function row(label, help, control, inline = false) {
+  const r = document.createElement('div'); r.className = 'row';
+  const head = document.createElement('div'); head.className = 'row-head';
+  const l = document.createElement('span'); l.className = 'label'; l.textContent = label;
+  head.appendChild(l);
+  if (inline) head.appendChild(control);
+  r.appendChild(head);
+  if (help) { const p = document.createElement('p'); p.textContent = help; r.appendChild(p); }
+  if (!inline) r.appendChild(control);
+  return r;
+}
+function renderSettings() {
+  const body = $('settingsBody');
+  body.innerHTML = '';
+  const info = camera.active ? camera.describe() : { qualities: ['720p', '1080p'], frameRates: [30], hardwareZoom: false, min: 1, max: 4 };
+  body.appendChild(row('Subject size', 'How much of the frame the subject should fill.',
+    seg('size', [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']])));
+  body.appendChild(row('Zoom speed', 'How quickly auto zoom reacts.',
+    seg('speed', [['slow', 'Gentle'], ['normal', 'Normal'], ['fast', 'Quick']])));
+  body.appendChild(row('Tracking sensitivity', 'Strict sticks to the exact subject. Eager keeps up with fast movement but is likelier to jump to a look-alike.',
+    seg('sensitivity', [['strict', 'Strict'], ['balanced', 'Balanced'], ['eager', 'Eager']])));
+  body.appendChild(row('Automatic zoom', null, sw('autoZoom', () => { zoomCtl.reset(camera.zoom); updateZoomUi(true); }), true));
+  body.appendChild(row('Maximum auto zoom', 'Beyond the phone’s longest lens, zoom is digital and looks softer.',
+    seg('maxAuto', [['3', '3×'], ['5', '5×'], ['10', '10×'], ['max', 'Max']], { disabled: (v) => v !== 'max' && Number(v) > info.max + 0.01 })));
+  body.appendChild(row('Camera', null, seg('camera', [['environment', 'Back'], ['user', 'Front']], { restart: true })));
+  body.appendChild(row('Video quality', settings.battery ? 'Battery saver uses 720p.' : null,
+    seg('quality', [['720p', '720p'], ['1080p', '1080p'], ['4k', '4K']], { restart: true, disabled: (v) => settings.battery || !info.qualities.includes(v) })));
+  body.appendChild(row('Frame rate', null,
+    seg('fps', [[30, '30 fps'], [60, '60 fps']], { restart: true, disabled: (v) => settings.battery || !info.frameRates.includes(Number(v)) })));
+  body.appendChild(row('Battery saver', 'Looks for the subject 8 times a second instead of continuously, and films in 720p.',
+    sw('battery', async () => { if (!capture.recording) await startCamera(); }), true));
+  const zoomInfo = info.hardwareZoom
+    ? `Real camera zoom, ${fmtZoom(info.min)} to ${fmtZoom(info.max)}. On iPhones with several lenses, iOS switches lens automatically as you zoom.`
+    : 'This browser doesn’t give web apps control of the camera’s zoom, so zoom here is digital (a crop of the full image). Use Safari on iOS 17 or later for real zoom.';
+  const det = state.modelStatus === 'ready' ? `AI: on-device (${detector.delegate === 'GPU' ? 'graphics chip' : detector.delegate === 'CPU' ? 'processor' : 'demo scene'})` : `AI: ${state.modelStatus === 'failed' ? 'not loaded' : 'loading'}`;
+  const p = document.createElement('p'); p.className = 'fineprint'; p.textContent = `${zoomInfo} ${det}.`;
+  body.appendChild(p);
+}
+
+// ------------------------------------------------------------------ start
+syncToggles();
+requestAnimationFrame(loop);
+if ('serviceWorker' in navigator && !params.has('nosw') && location.protocol === 'https:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+(async function boot() {
+  if (DEMO) return startCamera();
+  const issue = Camera.check();
+  if (issue) return showGate(issue);
+  let granted = false;
+  try { granted = localStorage.getItem('smartzoom.granted') === '1'; } catch (e) { /* ignore */ }
+  try {
+    const p = await navigator.permissions?.query({ name: 'camera' });
+    if (p?.state === 'granted') granted = true;
+    if (p?.state === 'denied') return showGate('denied');
+  } catch (e) { /* Safari < 16 doesn't support querying camera */ }
+  if (granted) startCamera();
+  else showGate('intro');
+}());
+
+</script>
+</body>
+</html>
