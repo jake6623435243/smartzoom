@@ -6,6 +6,15 @@ It's a web app (PWA). You put it online once, open it in Safari and add it to yo
 
 ---
 
+## What's new in version 2
+
+- **Library:** every photo and video is saved inside the app on your phone. Tap the thumbnail to open the library (All / Videos / Photos), rewatch videos full screen, swipe between them, and Save to Photos, Share or Delete. Captures are kept after you close the app.
+- **Save to Photos straight away:** after each shot, the confirmation has a **Save to Photos** button.
+- **Better recognition:** while following, the AI looks at a zoomed-in crop around the subject, so far-away subjects are found far more reliably. Tapping a subject that's too small to detect makes it look closer around your finger. A more accurate AI model is used automatically when your phone is fast enough (Settings › AI model).
+- **Better at staying on target:** it remembers each subject's top and bottom colours separately, and keeps several looks of them (turned around, in shade). It won't jump to someone walking in front of the subject, and it checks that position, size and movement make sense. After a lighting change it re-learns the subject's look, but only once it's confident.
+- **Smoother zoom:** zoom eases into and out of movement. It ignores size wobble that's just measurement noise, and ignores sizes from partly hidden or doubtful sightings.
+- **Easier to use:** quick zoom buttons (1×, 2×, 3×, 5×…) that glide smoothly, a **Resume auto zoom** button after you zoom by hand, double-tap anywhere to release the subject, a red frame while recording, an optional framing grid, grouped settings and one-time tips.
+
 ## Put it on your iPhone (phone only, about 10 minutes, free)
 
 You need to host the 6 app files at an `https://` address once. Safari only gives web pages camera access over https. These steps use GitHub Pages, which is free, and everything can be done in Safari on the phone.
@@ -39,7 +48,9 @@ Any other static web host with https works too. Upload the same files.
 | **Auto zoom** | Turns automatic zoom on or off. Tracking continues when auto zoom is off. |
 | **Zoom scale** | Drag the scale or pinch the picture to zoom manually. Auto zoom pauses for 2.5 s, then resumes. The amber marker on the scale shows where auto zoom is heading. |
 | **Photo / Video** | Tracking and auto zoom keep running while you shoot or record. |
-| **Thumbnail** | Captures from this session. Tap one to save it to Photos (via the share sheet) or share it. |
+| **Thumbnail** | Opens the library: everything you've shot, newest first. Tap a video to rewatch it; swipe for the next one. **Save to Photos**, **Share** and **Delete** are at the bottom. |
+| **Quick zoom** | Tap 1×, 2×, 3×… to glide to that zoom. While following, auto zoom pauses for a few seconds after you zoom by hand; **Resume auto zoom** hands control back at once. |
+| **Double-tap** | Anywhere on the picture releases the subject. |
 | **Settings** | Subject size (small/medium/large), zoom speed, tracking sensitivity, auto zoom, maximum auto zoom, preferred camera, video quality and frame rate (only what your camera supports), battery saver. |
 
 The status pill at the top always says what's happening. For example: "Following the person — 3.4×, zooming in, moving away" or "Looking for the dog — Widening the view to find it".
@@ -140,13 +151,29 @@ Run them yourself (on a computer, optional): `npm install`, `npm test`, `npm run
 
 ---
 
+## Version 2 benchmark (simulated)
+
+`tests/benchmark.mjs` is a harder simulation than the scenarios above. Its detector misses subjects that are only a few pixels tall, and colour signatures come from rendered pixels with lighting and noise. Averages over 20 runs, version 1 → version 2:
+
+| Scenario | On target | On the wrong person | Time to lock | Peak zoom acceleration |
+|---|---|---|---|---|
+| Far subject (60 m → 20 m) | 94.5% → 99.9% | 0% → 0% | 2.34 s → 0.02 s | 10.9 → 4.7 |
+| Busy street, 6 people incl. look-alikes | 64.0% → 99.0% | 35.0% → 0.6% | — | 8.6 → 4.8 |
+| Hidden 3 s, look-alike waiting nearby | 96.9% → 98.4% | 0.1% → 0% | — | 6.3 → 4.7 |
+| Sun to shade, then dusk, with a passer-by | 90.4% → 82.6% | 8.0% → 0% | — | 7.6 → 4.8 |
+| Same shirt, different trousers, crossing | 100% → 100% | 0% → 0% | — | 8.0 → 4.7 |
+| Car approaching fast | 100% → 100% | 0% → 0% | 0.53 s → 0 s | 7.1 → 4.9 |
+| Standing still | 100% → 100% | 0% → 0% | — | 10.4 → 4.7 |
+
+One trade-off: in dusk with a similar-looking passer-by, version 2 sometimes says "Looking for…" and waits rather than risk following the wrong person. Lower peak acceleration means gentler starts and stops. These are simulations, not phone tests.
+
 ## Known limitations
 
 - **Not yet run on a real iPhone.** The Safari-specific parts (zoom constraint, MediaPipe on the iPhone's graphics chip, MediaRecorder) follow Apple's and Google's documented APIs but haven't been exercised on a device. If something misbehaves on first launch, tell me what you see.
 - **Which lens is active isn't visible.** Browsers don't report which physical lens is in use, so the app says "camera zoom", never "optical". When iOS switches lenses you may see a small jump, as in the Camera app. Safari's zoom numbers may not match the Camera app's (on some models Safari's 1× might be the ultra-wide); the app shows exactly what Safari reports.
 - **No LiDAR or depth from the web.** Distance is the apparent-size trend described above.
 - **Photos are frames from the video stream,** up to the selected video quality (1080p or 4K). They aren't full 12/48 MP stills, and there's no Night mode or HDR processing.
-- **Saving uses the share sheet** ("Save Image" / "Save Video"). Web apps can't write to Photos directly. Unsaved captures are lost when the app is closed.
+- **Saving to Photos uses the share sheet** ("Save Image" / "Save Video"). Web apps can't write to Photos directly. The in-app library lives in SmartZoom's own storage on the phone. Deleting the app from the Home Screen, or clearing Safari's website data, deletes the library too, so save keepers to Photos. Long 4K videos use a lot of space (roughly 200 MB per minute).
 - **Tap only on detected subjects.** The detector knows 80 categories. Very small or distant subjects (under ~5% of the frame) are often not detected until you zoom in manually. It can't follow arbitrary unrecognised objects.
 - **Look-alikes.** Re-identification uses colour and position. Two people dressed identically who swap places out of view can be confused.
 - **Front camera** usually has no hardware zoom in Safari, so zoom there is digital (labelled).
@@ -167,13 +194,14 @@ SmartZoomCam/
 │   ├── camera.js            camera stream, zoom, interruptions
 │   ├── detector.js          MediaPipe detection + colour signatures
 │   ├── capture.js           photo, video, saving
+│   ├── library.js           in-app library (IndexedDB): save, list, play, delete
 │   ├── demo.js              demo scene / test harness (?demo)
 │   ├── sw.js                offline cache
 │   ├── manifest.webmanifest Home Screen app metadata
 │   └── *.png                icons
 ├── dist/                    built app: the 6 files you upload (all JS inlined into index.html)
 ├── tools/build.mjs          builds dist/
-├── tests/                   unit.mjs, scenarios.mjs, e2e.mjs, screenshots/
+├── tests/                   unit.mjs, scenarios.mjs, benchmark.mjs (hard mode), e2e.mjs, screenshots/
 └── package.json
 ```
 

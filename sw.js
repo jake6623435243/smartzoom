@@ -1,7 +1,7 @@
 // Service worker: makes SmartZoom work offline after the first visit.
 // The app shell is cached on install; the AI library, model and font are cached the
 // first time they download. Camera frames never pass through here.
-const VERSION = 'smartzoom-v1';
+const VERSION = 'smartzoom-v2';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 const RUNTIME_HOSTS = ['cdn.jsdelivr.net', 'storage.googleapis.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 
